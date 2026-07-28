@@ -902,8 +902,8 @@ async fn execute_select_text(
     start: Instant,
     row_limit: usize,
     prepared_column_types: Option<Vec<String>>,
-) -> Result<QueryResult, String> {
-    let stream = client.simple_query_raw(sql).await.map_err(pg_error_to_string)?;
+) -> Result<QueryResult, tokio_postgres::Error> {
+    let stream = client.simple_query_raw(sql).await?;
     tokio::pin!(stream);
     let mut columns: Vec<String> = Vec::new();
     let mut result_rows: Vec<Vec<serde_json::Value>> = Vec::new();
@@ -924,7 +924,7 @@ async fn execute_select_text(
                 }
                 let mut values = Vec::with_capacity(row.len());
                 for i in 0..row.len() {
-                    values.push(match row.try_get(i).map_err(pg_error_to_string)? {
+                    values.push(match row.try_get(i)? {
                         Some(value) => serde_json::Value::String(value.to_string()),
                         None => serde_json::Value::Null,
                     });
@@ -935,7 +935,7 @@ async fn execute_select_text(
                 truncated = true;
                 break;
             }
-            Err(err) => return Err(pg_error_to_string(err)),
+            Err(err) => return Err(err),
             Ok(SimpleQueryMessage::CommandComplete(_)) => {}
             Ok(_) => {}
         }
@@ -961,7 +961,7 @@ async fn finish_prepared_select(
     start: Instant,
     row_limit: usize,
     outcome: PreparedSelectOutcome,
-) -> Result<QueryResult, String> {
+) -> Result<QueryResult, tokio_postgres::Error> {
     match outcome {
         PreparedSelectOutcome::Complete(result) => Ok(result),
         PreparedSelectOutcome::TextFallback { column_types, unsupported_type } => {
@@ -974,12 +974,12 @@ async fn finish_prepared_select(
     }
 }
 
-pub(crate) async fn execute_select_query(
+pub(crate) async fn execute_select_query_typed(
     client: &deadpool_postgres::Client,
     sql: &str,
     start: Instant,
     row_limit: usize,
-) -> Result<QueryResult, String> {
+) -> Result<QueryResult, tokio_postgres::Error> {
     match execute_select_prepared(client, sql, start, row_limit).await {
         Ok(outcome) => finish_prepared_select(client, sql, start, row_limit, outcome).await,
         Err(err) if should_retry_postgres_stale_cache(&err) => {
@@ -993,14 +993,23 @@ pub(crate) async fn execute_select_query(
                 Err(err) if should_retry_postgres_text_query(&err) => {
                     execute_select_text(client, sql, start, row_limit, None).await
                 }
-                Err(err) => Err(pg_error_to_string(err)),
+                Err(err) => Err(err),
             }
         }
         Err(err) if should_retry_postgres_text_query(&err) => {
             execute_select_text(client, sql, start, row_limit, None).await
         }
-        Err(err) => Err(pg_error_to_string(err)),
+        Err(err) => Err(err),
     }
+}
+
+pub(crate) async fn execute_select_query(
+    client: &deadpool_postgres::Client,
+    sql: &str,
+    start: Instant,
+    row_limit: usize,
+) -> Result<QueryResult, String> {
+    execute_select_query_typed(client, sql, start, row_limit).await.map_err(pg_error_to_string)
 }
 
 pub enum PostgresQueryStreamItem {

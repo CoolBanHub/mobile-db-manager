@@ -41,6 +41,7 @@ Thumbs.db
 !.github/workflows/
 !.github/scripts/
 !.github/ISSUE_TEMPLATE/
+!.github/pull_request_template.md
 
 # Env
 .env

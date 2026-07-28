@@ -269,6 +269,16 @@ async fn main() {
         .route("/connection/save", post(routes::connection::save_connections))
         .route("/connection/list", get(routes::connection::load_connections))
         .route("/mobile/connections", get(routes::mobile::load_connections))
+        .route("/mobile/query", post(routes::mobile::execute_read_only_query))
+        .route("/mobile/history", get(routes::mobile::load_query_history))
+        .route(
+            "/mobile/saved-sql",
+            get(routes::mobile::load_saved_sql_library).post(routes::mobile::save_saved_sql_file),
+        )
+        .route(
+            "/mobile/saved-sql/{id}",
+            get(routes::mobile::load_saved_sql_file).delete(routes::mobile::delete_saved_sql_file),
+        )
         .route("/connection/mcp/add", post(routes::connection::mcp_add_connection))
         .route("/connection/mcp/remove", post(routes::connection::mcp_remove_connection))
         .route("/plugins", get(routes::plugins::list_plugins))

@@ -49,6 +49,57 @@ const DUCKDB_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const DUCKDB_DRAINING_MESSAGE: &str = "上一条 DuckDB 查询仍在停止，请稍后重试。";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManualTransactionErrorKind {
+    Query,
+    Timeout,
+    Connection,
+    Internal,
+}
+
+#[derive(Debug)]
+pub struct ManualTransactionError {
+    pub kind: ManualTransactionErrorKind,
+    message: String,
+}
+
+impl ManualTransactionError {
+    pub fn query(message: impl Into<String>) -> Self {
+        Self { kind: ManualTransactionErrorKind::Query, message: message.into() }
+    }
+
+    pub fn timeout(message: impl Into<String>) -> Self {
+        Self { kind: ManualTransactionErrorKind::Timeout, message: message.into() }
+    }
+
+    pub fn connection(message: impl Into<String>) -> Self {
+        Self { kind: ManualTransactionErrorKind::Connection, message: message.into() }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self { kind: ManualTransactionErrorKind::Internal, message: message.into() }
+    }
+
+    fn with_statement_context(self, statement_index: usize) -> Self {
+        Self {
+            kind: self.kind,
+            message: format!(
+                "Statement {} failed: {}. Transaction was auto-rolled back.",
+                statement_index + 1,
+                self.message
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for ManualTransactionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ManualTransactionError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolErrorAction {
     Keep,
     Discard,
@@ -3006,7 +3057,7 @@ pub async fn begin_manual_transaction(
     database: &str,
     schema: Option<&str>,
 ) -> Result<String, String> {
-    begin_transaction_session(state, connection_id, database, schema, false).await
+    begin_transaction_session(state, connection_id, database, schema, false, None).await
 }
 
 /// Start a read-only, repeatable snapshot for a database backup.
@@ -3015,7 +3066,153 @@ pub async fn begin_database_backup_snapshot(
     connection_id: &str,
     database: &str,
 ) -> Result<String, String> {
-    begin_transaction_session(state, connection_id, database, None, true).await
+    begin_transaction_session(state, connection_id, database, None, true, None).await
+}
+
+/// Start a PostgreSQL read-only transaction with request-scoped schema and
+/// server-enforced statement timeout settings.
+pub async fn begin_postgres_read_only_transaction(
+    state: &AppState,
+    connection_id: &str,
+    database: &str,
+    schema: Option<&str>,
+    statement_timeout_ms: u64,
+    startup_timeout_ms: u64,
+) -> Result<String, ManualTransactionError> {
+    let startup_timeout = Duration::from_millis(startup_timeout_ms.max(1));
+    let deadline = tokio::time::Instant::now() + startup_timeout;
+    let pool_key = tokio::time::timeout_at(deadline, async {
+        if database.is_empty() {
+            Ok(connection_id.to_string())
+        } else {
+            state.get_or_create_pool(connection_id, Some(database)).await
+        }
+    })
+    .await
+    .map_err(|_| ManualTransactionError::timeout("Timed out preparing the PostgreSQL connection pool"))?
+    .map_err(ManualTransactionError::connection)?;
+
+    let pool = {
+        let connections = tokio::time::timeout_at(deadline, state.connections.read())
+            .await
+            .map_err(|_| ManualTransactionError::timeout("Timed out reading the PostgreSQL connection pool"))?;
+        match connections.get(&pool_key) {
+            Some(PoolKind::Postgres(pool)) => pool.clone(),
+            Some(_) => {
+                return Err(ManualTransactionError::internal(
+                    "PostgreSQL read-only transaction requested for a non-PostgreSQL pool",
+                ))
+            }
+            None => return Err(ManualTransactionError::internal("PostgreSQL connection pool not found")),
+        }
+    };
+    let conn = tokio::time::timeout_at(deadline, pool.get())
+        .await
+        .map_err(|_| ManualTransactionError::timeout("Timed out acquiring a PostgreSQL connection"))?
+        .map_err(|error| ManualTransactionError::connection(format!("Failed to get PostgreSQL connection: {error}")))?;
+
+    let conn = match tokio::time::timeout_at(
+        deadline,
+        conn.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY", &[]),
+    )
+    .await
+    {
+        Ok(Ok(_)) => conn,
+        Ok(Err(error)) => {
+            discard_postgres_pool_connection(conn);
+            return Err(classify_manual_postgres_error(error, "BEGIN failed"));
+        }
+        Err(_) => {
+            discard_postgres_pool_connection(conn);
+            return Err(ManualTransactionError::timeout(
+                "Timed out starting the PostgreSQL read-only transaction; the connection was discarded",
+            ));
+        }
+    };
+
+    let conn = if let Some(schema) = schema {
+        let search_path_sql = db::postgres::postgres_set_search_path_sql(
+            schema,
+            db::postgres::PostgresSearchPathContext::LocalTransaction,
+        );
+        match tokio::time::timeout_at(deadline, conn.execute(&search_path_sql, &[])).await {
+            Ok(Ok(_)) => conn,
+            Ok(Err(error)) => {
+                discard_postgres_pool_connection(conn);
+                return Err(classify_manual_postgres_error(error, "SET search_path failed"));
+            }
+            Err(_) => {
+                discard_postgres_pool_connection(conn);
+                return Err(ManualTransactionError::timeout(
+                    "Timed out setting the PostgreSQL search path; the connection was discarded",
+                ));
+            }
+        }
+    } else {
+        conn
+    };
+
+    let timeout_sql = format!("SET LOCAL statement_timeout = {}", statement_timeout_ms.max(1));
+    let conn = match tokio::time::timeout_at(deadline, conn.execute(&timeout_sql, &[])).await {
+        Ok(Ok(_)) => conn,
+        Ok(Err(error)) => {
+            discard_postgres_pool_connection(conn);
+            return Err(classify_manual_postgres_error(error, "SET statement_timeout failed"));
+        }
+        Err(_) => {
+            discard_postgres_pool_connection(conn);
+            return Err(ManualTransactionError::timeout(
+                "Timed out configuring the PostgreSQL statement timeout; the connection was discarded",
+            ));
+        }
+    };
+
+    let txn_session_id = uuid::Uuid::new_v4().to_string();
+    let session = TransactionSession {
+        connection: Arc::new(tokio::sync::Mutex::new(TxnConnection::Postgres(Box::new(conn)))),
+        pool_key,
+        last_activity: std::time::Instant::now(),
+        busy: false,
+        connection_id: connection_id.to_string(),
+        database: database.to_string(),
+        schema: schema.map(str::to_string),
+    };
+    let mut sessions = match tokio::time::timeout_at(deadline, state.transaction_sessions.write()).await {
+        Ok(sessions) => sessions,
+        Err(_) => {
+            let connection = match Arc::try_unwrap(session.connection) {
+                Ok(connection) => connection.into_inner(),
+                Err(_) => unreachable!("new mobile transaction connection has no additional owners"),
+            };
+            match connection {
+                TxnConnection::Postgres(conn) => discard_postgres_pool_connection(*conn),
+                TxnConnection::Mysql(_) => unreachable!("mobile read-only transaction is PostgreSQL-only"),
+            }
+            return Err(ManualTransactionError::timeout(
+                "Timed out registering the PostgreSQL transaction; the connection was discarded",
+            ));
+        }
+    };
+    sessions.insert(txn_session_id.clone(), session);
+    drop(sessions);
+    spawn_txn_idle_watcher(state, txn_session_id.clone());
+    log::info!("[query][manual_txn:begin_read_only] session_id={}", txn_session_id);
+    Ok(txn_session_id)
+}
+
+fn discard_postgres_pool_connection(conn: deadpool_postgres::Object) {
+    drop(deadpool_postgres::Object::take(conn));
+}
+
+fn classify_manual_postgres_error(error: tokio_postgres::Error, context: &str) -> ManualTransactionError {
+    let message = format!("{context}: {error}");
+    if error.as_db_error().is_some_and(|db_error| db_error.code().code() == "57014") {
+        ManualTransactionError::timeout(message)
+    } else if error.is_closed() || error.as_db_error().is_none() {
+        ManualTransactionError::connection(message)
+    } else {
+        ManualTransactionError::query(message)
+    }
 }
 
 fn postgres_transaction_begin_sql(consistent_snapshot: bool) -> &'static str {
@@ -3052,6 +3249,7 @@ async fn begin_transaction_session(
     database: &str,
     schema: Option<&str>,
     consistent_snapshot: bool,
+    postgres_statement_timeout_ms: Option<u64>,
 ) -> Result<String, String> {
     let pool_key = if database.is_empty() {
         connection_id.to_string()
@@ -3080,19 +3278,27 @@ async fn begin_transaction_session(
             let begin_sql = postgres_transaction_begin_sql(consistent_snapshot);
             conn.execute(begin_sql, &[]).await.map_err(|e| format!("BEGIN failed: {e}"))?;
             if let Some(schema) = schema {
-                conn.execute(
-                    &db::postgres::postgres_set_search_path_sql(
-                        schema,
-                        db::postgres::PostgresSearchPathContext::LocalTransaction,
-                    ),
-                    &[],
-                )
-                .await
-                .map_err(|e| format!("SET search_path failed: {e}"))?;
+                let search_path_sql = db::postgres::postgres_set_search_path_sql(
+                    schema,
+                    db::postgres::PostgresSearchPathContext::LocalTransaction,
+                );
+                if let Err(error) = conn.execute(&search_path_sql, &[]).await {
+                    let _ = conn.execute("ROLLBACK", &[]).await;
+                    return Err(format!("SET search_path failed: {error}"));
+                }
+            }
+            if let Some(timeout_ms) = postgres_statement_timeout_ms {
+                if let Err(error) = conn.execute(&format!("SET LOCAL statement_timeout = {timeout_ms}"), &[]).await {
+                    let _ = conn.execute("ROLLBACK", &[]).await;
+                    return Err(format!("SET statement_timeout failed: {error}"));
+                }
             }
             TxnConnection::Postgres(Box::new(conn))
         }
         TxnPoolHandle::Mysql(mysql_pool) => {
+            if postgres_statement_timeout_ms.is_some() {
+                return Err("PostgreSQL read-only transaction requested for a MySQL connection".to_string());
+            }
             let mut conn = mysql_pool.get_conn().await.map_err(|e| format!("Failed to get MySQL connection: {e}"))?;
             if let Some(isolation_sql) = mysql_transaction_isolation_sql(consistent_snapshot) {
                 conn.query_drop(isolation_sql).await.map_err(|e| format!("SET TRANSACTION failed: {e}"))?;
@@ -3149,6 +3355,19 @@ pub async fn execute_in_manual_transaction(
     _schema: Option<&str>,
     max_rows: Option<usize>,
 ) -> Result<Vec<db::QueryResult>, String> {
+    execute_in_manual_transaction_classified(state, txn_session_id, sql, _database, _schema, max_rows)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+pub async fn execute_in_manual_transaction_classified(
+    state: &AppState,
+    txn_session_id: &str,
+    sql: &str,
+    _database: &str,
+    _schema: Option<&str>,
+    max_rows: Option<usize>,
+) -> Result<Vec<db::QueryResult>, ManualTransactionError> {
     const TXN_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
     // Resolve statements and validate before taking the per-session connection
@@ -3156,9 +3375,11 @@ pub async fn execute_in_manual_transaction(
     // remove it and roll back once the current DB operation releases the lock.
     let (pool_key, connection_id) = {
         let sessions = state.transaction_sessions.read().await;
-        let session = sessions
-            .get(txn_session_id)
-            .ok_or("Transaction session not found or expired; it may have been auto-rolled back due to inactivity")?;
+        let session = sessions.get(txn_session_id).ok_or_else(|| {
+            ManualTransactionError::internal(
+                "Transaction session not found or expired; it may have been auto-rolled back due to inactivity",
+            )
+        })?;
         (session.pool_key.clone(), session.connection_id.clone())
     };
 
@@ -3173,18 +3394,17 @@ pub async fn execute_in_manual_transaction(
 
     // Read-only check while the session is still in the map. If this fails the
     // session remains intact.
-    check_read_only_for_connection_multi(state, &pool_key, &statements).await?;
+    check_read_only_for_connection_multi(state, &pool_key, &statements).await.map_err(ManualTransactionError::query)?;
 
     let connection = {
         let mut sessions = state.transaction_sessions.write().await;
         let Some(session) = sessions.get_mut(txn_session_id) else {
-            return Err(
-                "Transaction session not found or expired; it may have been auto-rolled back due to inactivity"
-                    .to_string(),
-            );
+            return Err(ManualTransactionError::internal(
+                "Transaction session not found or expired; it may have been auto-rolled back due to inactivity",
+            ));
         };
         if session.busy {
-            return Err("Transaction session is already executing".to_string());
+            return Err(ManualTransactionError::internal("Transaction session is already executing"));
         }
         if session.last_activity.elapsed() > TXN_IDLE_TIMEOUT {
             let session = sessions.remove(txn_session_id).expect("session exists");
@@ -3198,15 +3418,18 @@ pub async fn execute_in_manual_transaction(
     if let Some(connection) = connection {
         let mut conn = connection.lock().await;
         let _ = rollback_manual_txn_connection(&mut conn).await;
-        return Err("Transaction was auto-rolled back due to 5 minutes of inactivity".to_string());
+        return Err(ManualTransactionError::internal(
+            "Transaction was auto-rolled back due to 5 minutes of inactivity",
+        ));
     }
 
     let connection = {
         let sessions = state.transaction_sessions.read().await;
-        sessions
-            .get(txn_session_id)
-            .map(|session| Arc::clone(&session.connection))
-            .ok_or("Transaction session not found or expired; it may have been auto-rolled back due to inactivity")?
+        sessions.get(txn_session_id).map(|session| Arc::clone(&session.connection)).ok_or_else(|| {
+            ManualTransactionError::internal(
+                "Transaction session not found or expired; it may have been auto-rolled back due to inactivity",
+            )
+        })?
     };
     let row_limit = max_rows.unwrap_or(MAX_ROWS).max(1);
     let mut results = Vec::with_capacity(statements.len());
@@ -3215,9 +3438,11 @@ pub async fn execute_in_manual_transaction(
     for (i, statement) in statements.iter().enumerate() {
         let result = match &mut *conn {
             TxnConnection::Postgres(conn) => {
-                execute_manual_txn_postgres_statement(conn.as_ref(), statement, row_limit).await
+                execute_manual_txn_postgres_statement_classified(conn.as_ref(), statement, row_limit).await
             }
-            TxnConnection::Mysql(conn) => execute_manual_txn_mysql_statement(conn, statement, row_limit).await,
+            TxnConnection::Mysql(conn) => execute_manual_txn_mysql_statement(conn, statement, row_limit)
+                .await
+                .map_err(ManualTransactionError::query),
         };
         match result {
             Ok(query_result) => results.push(query_result),
@@ -3231,7 +3456,7 @@ pub async fn execute_in_manual_transaction(
                 if should_rollback {
                     let _ = rollback_manual_txn_connection(&mut conn).await;
                 }
-                return Err(format!("Statement {} failed: {}. Transaction was auto-rolled back.", i + 1, e));
+                return Err(e.with_statement_context(i));
             }
         }
     }
@@ -3439,15 +3664,18 @@ fn spawn_txn_idle_watcher(state: &AppState, txn_session_id: String) {
     });
 }
 
-async fn execute_manual_txn_postgres_statement(
+async fn execute_manual_txn_postgres_statement_classified(
     conn: &deadpool_postgres::Object,
     sql: &str,
     row_limit: usize,
-) -> Result<db::QueryResult, String> {
+) -> Result<db::QueryResult, ManualTransactionError> {
     if starts_with_executable_sql_keyword(sql, &["SELECT", "SHOW", "EXPLAIN", "WITH", "TABLE"]) {
-        db::postgres::execute_select_query(conn, sql, std::time::Instant::now(), row_limit).await
+        db::postgres::execute_select_query_typed(conn, sql, std::time::Instant::now(), row_limit)
+            .await
+            .map_err(|error| classify_manual_postgres_error(error, "Query failed"))
     } else {
-        let affected = conn.execute(sql, &[]).await.map_err(|e| format!("Query failed: {e}"))?;
+        let affected =
+            conn.execute(sql, &[]).await.map_err(|error| classify_manual_postgres_error(error, "Query failed"))?;
         Ok(db::QueryResult {
             columns: vec![],
             column_types: Vec::new(),
