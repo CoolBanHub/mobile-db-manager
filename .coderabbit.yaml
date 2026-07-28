@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "zh-CN"
+early_access: false
+
+reviews:
+  profile: "assertive"
+  high_level_summary: true
+  review_status: true
+  review_details: true
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    # Never silently stop reviewing an active branch after a fixed number of pushes.
+    auto_pause_after_reviewed_commits: 0
+    ignore_title_keywords:
+      - "WIP"
+      - "[skip review]"
+    labels:
+      - "!do-not-review"
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "renovate[bot]"
+  path_filters:
+    - "!vendor/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/node_modules/**"
+    - "!**/target/**"
+    - "!**/*.lock"
+    - "!pnpm-lock.yaml"
+  path_instructions:
+    - path: "{crates,src-tauri}/**/*.rs"
+      instructions: |
+        重点检查并发与异步边界、资源释放、事务完整性、错误传播和跨数据库兼容性。
+        对数据库输入、SQL 拼接、文件路径和外部命令检查注入风险。
+        行为变化必须有覆盖成功、失败和边界情况的回归测试。
+    - path: "crates/dbx-web/src/routes/**/*.rs"
+      instructions: |
+        重点检查认证与授权、输入验证、HTTP 状态码、敏感信息泄露和超时/取消处理。
+        检查接口变更对所有调用方的兼容性。
+    - path: "apps/{desktop,android}/src/**/*.{ts,vue}"
+      instructions: |
+        重点检查异步竞态、状态同步、空值和错误状态、事件清理以及用户可见回归。
+        UI 行为变化应有测试；交互组件还需检查键盘操作和可访问性。
+    - path: "**/*.{test,spec}.{ts,js,rs}"
+      instructions: |
+        检查测试是否真正覆盖变更的行为、失败路径和边界条件，而不只是复述实现。
+    - path: ".github/workflows/**"
+      instructions: |
+        检查最小权限、第三方 Action 固定版本、缓存正确性、fork PR 的密钥隔离和条件表达式。
+  tools:
+    github-checks:
+      enabled: true
+      # Rust jobs can exceed the default 90-second window.
+      timeout_ms: 900000
+
+chat:
+  auto_reply: true

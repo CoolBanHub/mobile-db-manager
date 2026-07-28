@@ -40,6 +40,59 @@ export interface ColumnInfo {
   comment: string | null;
 }
 
+export interface QueryResult {
+  columns: string[];
+  rows: unknown[][];
+  affected_rows: number;
+  execution_time_ms: number;
+  truncated: boolean;
+}
+
+export interface MobileQueryDraft {
+  nonce: number;
+  connectionId: string;
+  database: string;
+  schema: string | null;
+  sql: string;
+}
+
+export interface MobileHistoryEntry {
+  id: string;
+  connectionId: string;
+  connectionName: string;
+  database: string;
+  schema: string | null;
+  sql: string;
+  executedAt: string;
+  executionTimeMs: number;
+  success: boolean;
+  error: string | null;
+}
+
+export interface SavedSqlFolder {
+  id: string;
+  connectionId: string;
+  parentFolderId: string | null;
+  name: string;
+}
+
+export interface SavedSqlFile {
+  id: string;
+  connectionId: string;
+  folderId: string | null;
+  name: string;
+  database: string;
+  schema: string | null;
+  sql: string;
+  sqlLoaded: boolean;
+  updatedAt: string;
+}
+
+export interface SavedSqlLibrary {
+  folders: SavedSqlFolder[];
+  files: SavedSqlFile[];
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -103,9 +156,68 @@ export async function apiGetJson<T>(
   token: string | null,
   params: Record<string, string | number | undefined>,
 ): Promise<T> {
-  const response = await apiFetch(baseUrl, buildApiPath(path, params), token, {
-    headers: { Accept: "application/json" },
+  return withApiTimeout(async (signal) => {
+    const response = await apiFetch(baseUrl, buildApiPath(path, params), token, {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    if (!response.ok) throw new ApiError(await apiErrorMessage(response), response.status);
+    return response.json() as Promise<T>;
   });
-  if (!response.ok) throw new ApiError(`服务器返回 ${response.status}`, response.status);
-  return response.json() as Promise<T>;
+}
+
+async function apiErrorMessage(response: Response): Promise<string> {
+  const fallback = `服务器返回 ${response.status}`;
+  const text = await response.text().catch(() => "");
+  if (!text) return fallback;
+  try {
+    const payload = JSON.parse(text) as { message?: string; error?: string };
+    return payload.message ?? payload.error ?? fallback;
+  } catch {
+    return text;
+  }
+}
+
+export async function apiPostJson<T>(
+  baseUrl: string,
+  path: string,
+  token: string | null,
+  body: unknown,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<T> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  const timeout = window.setTimeout(abort, options.timeoutMs ?? 35_000);
+  try {
+    const response = await apiFetch(baseUrl, path, token, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new ApiError(await apiErrorMessage(response), response.status);
+    }
+    return response.json() as Promise<T>;
+  } finally {
+    window.clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abort);
+  }
+}
+
+export async function apiDeleteJson<T>(
+  baseUrl: string,
+  path: string,
+  token: string | null,
+): Promise<T> {
+  return withApiTimeout(async (signal) => {
+    const response = await apiFetch(baseUrl, path, token, {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    if (!response.ok) throw new ApiError(await apiErrorMessage(response), response.status);
+    return response.json() as Promise<T>;
+  });
 }

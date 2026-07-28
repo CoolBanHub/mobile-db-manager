@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import HistoryLibrary from "./components/HistoryLibrary.vue";
 import MetadataBrowser from "./components/MetadataBrowser.vue";
-import { apiFetch, withApiTimeout, type MobileConnectionSummary, type MobileLoginResponse } from "./lib/mobileApi";
+import QueryWorkbench from "./components/QueryWorkbench.vue";
+import {
+  apiFetch,
+  withApiTimeout,
+  type MobileConnectionSummary,
+  type MobileLoginResponse,
+  type MobileQueryDraft,
+} from "./lib/mobileApi";
 import { clearServerProfile, loadServerProfile, saveServerProfile, type ServerProfile } from "./lib/serverProfile";
 
 type CheckState = "idle" | "checking" | "ready" | "auth" | "error";
@@ -27,6 +35,8 @@ const setupRequired = ref(false);
 const connections = ref<MobileConnectionSummary[]>([]);
 const connectionsLoading = ref(false);
 const connectionsError = ref("");
+const queryDraft = ref<MobileQueryDraft | null>(null);
+let queryDraftNonce = 0;
 
 const statusLabel = computed(() => {
   if (checkState.value === "checking") return "正在握手";
@@ -214,6 +224,11 @@ function sectionLabel(section: MobileSection) {
   return { connections: "连接", query: "查询", history: "历史", settings: "设置" }[section];
 }
 
+function openQueryDraft(draft: Omit<MobileQueryDraft, "nonce">) {
+  queryDraft.value = { ...draft, nonce: ++queryDraftNonce };
+  activeSection.value = "query";
+}
+
 onMounted(() => {
   if (savedProfile.value) void checkServer(savedProfile.value);
 });
@@ -323,13 +338,23 @@ onMounted(() => {
             @auth-expired="handleMetadataAuthExpired"
           />
         </div>
-        <div v-else-if="activeSection === 'query'" class="empty-module">
-          <div class="module-icon">›_</div><h4>移动查询工作台</h4>
-          <p>全屏 SQL 编辑、执行控制、危险语句确认和结果分页将在下一阶段接入。</p>
-        </div>
-        <div v-else-if="activeSection === 'history'" class="empty-module">
-          <div class="module-icon">↺</div><h4>最近活动</h4><p>查询历史和收藏 SQL 将与 DBX Server 保持一致。</p>
-        </div>
+        <QueryWorkbench
+          v-else-if="activeSection === 'query'"
+          :base-url="savedProfile.baseUrl"
+          :connections="connections"
+          :draft="queryDraft"
+          :token="sessionToken"
+          @auth-expired="handleMetadataAuthExpired"
+          @draft-consumed="queryDraft = null"
+        />
+        <HistoryLibrary
+          v-else-if="activeSection === 'history'"
+          :base-url="savedProfile.baseUrl"
+          :connections="connections"
+          :token="sessionToken"
+          @auth-expired="handleMetadataAuthExpired"
+          @open-query="openQueryDraft"
+        />
         <div v-else class="settings-list">
           <button v-if="sessionToken" :disabled="logoutPending" type="button" @click="logout">
             <span><b>{{ logoutPending ? "正在撤销会话" : "退出登录" }}</b><small>服务端确认后才会清除本地令牌</small></span><i>→</i>

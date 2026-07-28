@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   ApiTimeoutError,
+  apiDeleteJson,
   apiGetJson,
   buildApiHeaders,
   buildApiPath,
@@ -146,6 +147,41 @@ describe("apiGetJson", () => {
       name: "ApiError",
       message: "服务器返回 401",
       status: 401,
+    } satisfies Partial<ApiError>);
+  });
+});
+
+describe("apiDeleteJson", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("deletes an encoded saved SQL resource with the mobile bearer token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("null", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      apiDeleteJson("https://dbx.example", "/api/mobile/saved-sql/query%2Fone", "mobile-token"),
+    ).resolves.toBeNull();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://dbx.example/api/mobile/saved-sql/query%2Fone");
+    expect(init.method).toBe("DELETE");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer mobile-token");
+  });
+
+  it("keeps a plain-text server error message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Saved SQL not found", { status: 404 })));
+
+    await expect(apiDeleteJson("https://dbx.example", "/api/mobile/saved-sql/missing", "mobile-token")).rejects.toMatchObject({
+      name: "ApiError",
+      message: "Saved SQL not found",
+      status: 404,
     } satisfies Partial<ApiError>);
   });
 });

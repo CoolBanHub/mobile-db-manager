@@ -54,6 +54,11 @@ The current milestone contains:
 - a connection catalog containing display-safe fields only.
 - drill-down browsing from database to Schema, table/view, and column metadata;
 - paged table loading for large database catalogs.
+- a server-enforced read-only SQL workbench limited to one statement, 200 rows, 2 MiB, a 30-second
+  PostgreSQL statement timeout, and a 35-second overall server budget;
+- horizontally scrollable results with 20-row device-side pages.
+- server-synchronized query history, including successful and failed mobile queries;
+- searchable saved SQL with open, create, favorite-from-history, and delete actions.
 
 Changing the DBX management password revokes every browser and mobile session.
 Explicit logout and server switching keep the local token until the server
@@ -65,4 +70,4 @@ Database usernames, passwords, connection strings, certificates, client keys,
 transport configuration, and initialization scripts are never returned by the
 mobile connection catalog endpoint.
 
-The next milestone will add the mobile SQL editor and paged query results.
+The next milestone will add mobile query-result export and sharing.

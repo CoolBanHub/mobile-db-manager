@@ -3,7 +3,7 @@
 PNPM ?= pnpm
 TAURI_DEV_PORT ?= 1420
 
-.PHONY: help install docs-install check-tauri-dev-port dev dev-fast dev-web dev-backend build package docs docs-build check test cargo-check-fast cargo-test-fast db db-list db-verify db-down db-reset db-check db-completion
+.PHONY: help install docs-install check-tauri-dev-port dev dev-fast dev-web dev-backend build package docs docs-build check test review-check review-check-full cargo-check-fast cargo-test-fast db db-list db-verify db-down db-reset db-check db-completion
 
 export DB
 export DB_VERSION
@@ -39,6 +39,8 @@ help:
 	@printf '%s\n' 'Checks:'
 	@printf '  %-23s %s\n' 'make check' 'Run project checks'
 	@printf '  %-23s %s\n' 'make test' 'Run project tests'
+	@printf '  %-23s %s\n' 'make review-check' 'Run checks selected from the current diff'
+	@printf '  %-23s %s\n' 'make review-check-full' 'Run all review checks before merge'
 	@printf '  %-23s %s\n' 'make cargo-check-fast' 'Run Rust check without default features'
 	@printf '  %-23s %s\n' 'make cargo-test-fast' 'Run Rust tests without default features'
 	@printf '%s\n' ''
@@ -99,6 +101,12 @@ check: node_modules/.modules.yaml
 
 test: node_modules/.modules.yaml
 	$(PNPM) test
+
+review-check: node_modules/.modules.yaml
+	$(PNPM) review:check
+
+review-check-full: node_modules/.modules.yaml
+	$(PNPM) review:check:full
 
 cargo-check-fast:
 	cargo check --no-default-features
