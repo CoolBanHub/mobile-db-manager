@@ -12,6 +12,10 @@ pub struct LoginRateLimit {
     pub locked_until: Option<std::time::Instant>,
 }
 
+pub struct MobileSession {
+    pub expires_at: std::time::Instant,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NacosImportContext {
     pub owner_session: Option<String>,
@@ -27,6 +31,7 @@ pub struct WebState {
     pub password_disabled: bool,
     pub password_hash: RwLock<Option<String>>,
     pub sessions: RwLock<HashSet<String>>,
+    pub mobile_sessions: RwLock<HashMap<String, MobileSession>>,
     pub sse_channels: RwLock<HashMap<String, broadcast::Sender<String>>>,
     pub transfer_progress_channels: RwLock<HashMap<String, Arc<TransferProgressChannel>>>,
     pub table_import_channels: RwLock<HashMap<String, watch::Sender<String>>>,

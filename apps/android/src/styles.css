@@ -212,6 +212,57 @@ button {
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.36);
 }
 
+.login-card {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--amber);
+  background: var(--panel);
+  padding: 20px;
+}
+
+.login-card h3 {
+  margin: 8px 0 10px;
+  font-size: 20px;
+}
+
+.login-card p {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.login-card label,
+.login-card label > span {
+  display: block;
+}
+
+.login-card label > span {
+  margin-bottom: 8px;
+  color: #bdc3bb;
+  font-size: 11px;
+}
+
+.login-card input {
+  width: 100%;
+  min-height: 51px;
+  border: 1px solid var(--line);
+  outline: none;
+  background: rgba(4, 6, 5, 0.66);
+  padding: 0 14px;
+  color: var(--ink);
+}
+
+.login-card input:focus {
+  border-color: rgba(199, 255, 61, 0.7);
+  box-shadow: inset 3px 0 0 var(--acid);
+}
+
+.login-card .primary-action {
+  margin-top: 18px;
+}
+
 .card-index {
   margin-bottom: 22px;
   color: var(--acid);
@@ -433,6 +484,93 @@ button {
   padding: 28px 22px;
 }
 
+.empty-module.compact {
+  min-height: 180px;
+}
+
+.inline-action {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  background: transparent;
+  padding: 9px 13px;
+  color: var(--acid);
+  font-size: 10px;
+}
+
+.connections-module {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.connection-card {
+  position: relative;
+  display: flex;
+  min-height: 112px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 15px 34px 15px 19px;
+}
+
+.connection-stripe {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+}
+
+.connection-main {
+  min-width: 0;
+}
+
+.connection-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--acid);
+  font-size: 8px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.connection-title em {
+  border: 1px solid rgba(255, 187, 61, 0.4);
+  padding: 2px 4px;
+  color: var(--amber);
+  font-size: 7px;
+  font-style: normal;
+}
+
+.connection-main h4 {
+  margin: 9px 0 6px;
+  font-size: 15px;
+}
+
+.connection-main p,
+.connection-main small {
+  display: block;
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-main small {
+  margin-top: 7px;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.connection-card > i {
+  position: absolute;
+  right: 15px;
+  color: var(--faint);
+  font-size: 21px;
+  font-style: normal;
+}
+
 .module-icon {
   color: var(--acid);
   font-size: 31px;
@@ -454,6 +592,11 @@ button {
 
 .settings-list {
   margin-top: 16px;
+}
+
+.settings-list {
+  display: grid;
+  gap: 10px;
 }
 
 .settings-list button {

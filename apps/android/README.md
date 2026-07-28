@@ -46,6 +46,15 @@ always use HTTPS.
 
 ## Current milestone
 
-The first milestone contains the Android shell, server profile validation,
-connectivity check, mobile navigation foundation, and native Gradle project.
-Bearer-token mobile authentication and database browsing are the next milestone.
+The current milestone contains:
+
+- the Android shell, server profile validation, and native Gradle project;
+- password login through a dedicated 30-day mobile Bearer session;
+- an in-memory device token that is discarded when the app process restarts;
+- a connection catalog containing display-safe fields only.
+
+Database usernames, passwords, connection strings, certificates, client keys,
+transport configuration, and initialization scripts are never returned by the
+mobile connection catalog endpoint.
+
+The next milestone will add database, schema, table, and field browsing.

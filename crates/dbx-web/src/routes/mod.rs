@@ -12,6 +12,7 @@ pub mod history;
 pub mod jdbc;
 pub mod layout;
 pub mod mcp_policy;
+pub mod mobile;
 pub mod mongo;
 #[cfg(feature = "mq-admin")]
 pub mod mq;

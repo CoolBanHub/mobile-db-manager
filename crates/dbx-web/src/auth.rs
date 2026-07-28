@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::state::WebState;
+use crate::state::{MobileSession, WebState};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -30,8 +30,17 @@ pub struct AuthCheckResponse {
     pub setup_required: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileLoginResponse {
+    pub ok: bool,
+    pub token: Option<String>,
+    pub expires_at: Option<u64>,
+}
+
 const MAX_ATTEMPTS: u32 = 5;
 const LOCKOUT_SECS: u64 = 60;
+const MOBILE_SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 
 fn session_cookie_path(state: &WebState) -> &str {
     state.public_base_path.as_str()
@@ -112,6 +121,67 @@ pub async fn login(State(state): State<Arc<WebState>>, Json(body): Json<LoginReq
     Ok((StatusCode::OK, [("set-cookie", cookie.as_str())], Json(serde_json::json!({"ok": true}))).into_response())
 }
 
+pub async fn mobile_login(
+    State(state): State<Arc<WebState>>,
+    Json(body): Json<LoginRequest>,
+) -> Result<Response, StatusCode> {
+    if state.password_disabled {
+        return Ok(
+            (StatusCode::OK, Json(MobileLoginResponse { ok: true, token: None, expires_at: None })).into_response()
+        );
+    }
+
+    let hash_guard = state.password_hash.read().await;
+    let hash_str = match hash_guard.as_deref() {
+        Some(hash) => hash.to_string(),
+        None => return Err(StatusCode::CONFLICT),
+    };
+    drop(hash_guard);
+
+    {
+        let rate_limit = state.login_rate_limit.lock().await;
+        if let Some(locked_until) = rate_limit.locked_until {
+            if locked_until > std::time::Instant::now() {
+                let remaining = (locked_until - std::time::Instant::now()).as_secs();
+                return Ok((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({"error": format!("请 {remaining} 秒后再试")})),
+                )
+                    .into_response());
+            }
+        }
+    }
+
+    let parsed_hash = PasswordHash::new(&hash_str).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if Argon2::default().verify_password(body.password.as_bytes(), &parsed_hash).is_err() {
+        let mut rate_limit = state.login_rate_limit.lock().await;
+        rate_limit.fail_count += 1;
+        if rate_limit.fail_count >= MAX_ATTEMPTS {
+            rate_limit.locked_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(LOCKOUT_SECS));
+            rate_limit.fail_count = 0;
+        }
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    {
+        let mut rate_limit = state.login_rate_limit.lock().await;
+        rate_limit.fail_count = 0;
+        rate_limit.locked_until = None;
+    }
+
+    let token = uuid::Uuid::new_v4().to_string();
+    let expires_at_instant = std::time::Instant::now() + std::time::Duration::from_secs(MOBILE_SESSION_TTL_SECS);
+    state.mobile_sessions.write().await.insert(token.clone(), MobileSession { expires_at: expires_at_instant });
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_add(MOBILE_SESSION_TTL_SECS);
+
+    Ok((StatusCode::OK, Json(MobileLoginResponse { ok: true, token: Some(token), expires_at: Some(expires_at) }))
+        .into_response())
+}
+
 pub async fn setup(State(state): State<Arc<WebState>>, Json(body): Json<LoginRequest>) -> Result<Response, StatusCode> {
     if state.password_disabled {
         return Err(StatusCode::FORBIDDEN);
@@ -155,7 +225,7 @@ pub async fn check(State(state): State<Arc<WebState>>, req: Request<axum::body::
         return Json(AuthCheckResponse { authenticated: false, required: false, setup_required: true });
     }
     let authenticated = match extract_session_token(&req) {
-        Some(token) => state.sessions.read().await.contains(&token),
+        Some(token) => has_valid_session(&state, &token).await,
         None => false,
     };
     Json(AuthCheckResponse { authenticated, required: true, setup_required: false })
@@ -196,18 +266,29 @@ pub async fn change_password(
 pub async fn logout(State(state): State<Arc<WebState>>, req: Request<axum::body::Body>) -> Response {
     if let Some(token) = extract_session_token(&req) {
         state.sessions.write().await.remove(&token);
+        state.mobile_sessions.write().await.remove(&token);
     }
     let cookie = format!("dbx_session=; Path={}; HttpOnly; Max-Age=0", session_cookie_path(&state));
     (StatusCode::OK, [("set-cookie", cookie.as_str())], Json(serde_json::json!({"ok": true}))).into_response()
 }
 
 pub fn session_token_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
-    let cookie_header = headers.get("cookie")?.to_str().ok()?;
-    for pair in cookie_header.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix("dbx_session=") {
-            if !value.is_empty() {
-                return Some(value.to_string());
+    if let Some(authorization) = headers.get("authorization").and_then(|value| value.to_str().ok()) {
+        if let Some((scheme, token)) = authorization.trim().split_once(' ') {
+            let token = token.trim();
+            if scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() && !token.contains(char::is_whitespace) {
+                return Some(token.to_string());
+            }
+        }
+    }
+
+    if let Some(cookie_header) = headers.get("cookie").and_then(|value| value.to_str().ok()) {
+        for pair in cookie_header.split(';') {
+            let pair = pair.trim();
+            if let Some(value) = pair.strip_prefix("dbx_session=") {
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
             }
         }
     }
@@ -216,6 +297,22 @@ pub fn session_token_from_headers(headers: &axum::http::HeaderMap) -> Option<Str
 
 fn extract_session_token<B>(req: &Request<B>) -> Option<String> {
     session_token_from_headers(req.headers())
+}
+
+async fn has_valid_session(state: &WebState, token: &str) -> bool {
+    if state.sessions.read().await.contains(token) {
+        return true;
+    }
+
+    let mut sessions = state.mobile_sessions.write().await;
+    match sessions.get(token) {
+        Some(session) if session.expires_at > std::time::Instant::now() => true,
+        Some(_) => {
+            sessions.remove(token);
+            false
+        }
+        None => false,
+    }
 }
 
 pub async fn auth_middleware(
@@ -244,7 +341,7 @@ pub async fn auth_middleware(
 
     // Check session token
     if let Some(token) = extract_session_token(&req) {
-        if state.sessions.read().await.contains(&token) {
+        if has_valid_session(&state, &token).await {
             return next.run(req).await;
         }
     }
@@ -254,7 +351,9 @@ pub async fn auth_middleware(
 
 #[cfg(test)]
 mod tests {
-    use super::{api_path_suffix, middleware_api_path_suffix};
+    use axum::http::{HeaderMap, HeaderValue};
+
+    use super::{api_path_suffix, middleware_api_path_suffix, session_token_from_headers};
 
     #[test]
     fn api_path_suffix_handles_root_api_paths() {
@@ -277,5 +376,22 @@ mod tests {
         assert_eq!(middleware_api_path_suffix("/api/connection/list", "/"), Some("connection/list"));
         assert_eq!(middleware_api_path_suffix("/dbx/api/connection/list", "/dbx"), Some("connection/list"));
         assert_eq!(middleware_api_path_suffix("/dbx/login", "/dbx"), None);
+    }
+
+    #[test]
+    fn bearer_token_takes_precedence_over_browser_cookie() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer mobile-token"));
+        headers.insert("cookie", HeaderValue::from_static("dbx_session=browser-token"));
+
+        assert_eq!(session_token_from_headers(&headers).as_deref(), Some("mobile-token"));
+    }
+
+    #[test]
+    fn malformed_bearer_token_is_rejected_without_a_cookie() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer two tokens"));
+
+        assert_eq!(session_token_from_headers(&headers), None);
     }
 }

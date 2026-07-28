@@ -60,5 +60,11 @@ pnpm install --frozen-lockfile
 pnpm android:build:debug
 ```
 
+Available recovery points:
+
+- `android-baseline-v0`: repository state before Android development
+- `android-mvp-v1`: runnable Android shell and server profile
+- `android-mvp-v2`: mobile login and display-safe connection catalog
+
 Server and device configuration formats must remain versioned and backward
 compatible. The initial server profile key is `dbx-mobile.server-profile.v1`.

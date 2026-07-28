@@ -233,6 +233,7 @@ async fn main() {
         password_disabled,
         password_hash: RwLock::new(password_hash),
         sessions: RwLock::new(HashSet::new()),
+        mobile_sessions: RwLock::new(HashMap::new()),
         sse_channels: RwLock::new(HashMap::new()),
         transfer_progress_channels: RwLock::new(HashMap::new()),
         table_import_channels: RwLock::new(HashMap::new()),
@@ -249,6 +250,7 @@ async fn main() {
     let api = Router::new()
         // Auth
         .route("/auth/login", post(auth::login))
+        .route("/auth/mobile-login", post(auth::mobile_login))
         .route("/auth/check", get(auth::check))
         .route("/auth/setup", post(auth::setup))
         .route("/auth/change-password", post(auth::change_password))
@@ -266,6 +268,7 @@ async fn main() {
         .route("/connection/close-database", post(routes::connection::close_database_connection))
         .route("/connection/save", post(routes::connection::save_connections))
         .route("/connection/list", get(routes::connection::load_connections))
+        .route("/mobile/connections", get(routes::mobile::load_connections))
         .route("/connection/mcp/add", post(routes::connection::mcp_add_connection))
         .route("/connection/mcp/remove", post(routes::connection::mcp_remove_connection))
         .route("/plugins", get(routes::plugins::list_plugins))
