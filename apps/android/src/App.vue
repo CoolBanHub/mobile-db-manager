@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { apiFetch, type MobileConnectionSummary, type MobileLoginResponse } from "./lib/mobileApi";
+import MetadataBrowser from "./components/MetadataBrowser.vue";
+import { apiFetch, withApiTimeout, type MobileConnectionSummary, type MobileLoginResponse } from "./lib/mobileApi";
 import { clearServerProfile, loadServerProfile, saveServerProfile, type ServerProfile } from "./lib/serverProfile";
 
 type CheckState = "idle" | "checking" | "ready" | "auth" | "error";
@@ -21,6 +22,7 @@ const activeSection = ref<MobileSection>("connections");
 const password = ref("");
 const sessionToken = ref<string | null>(null);
 const loginPending = ref(false);
+const logoutPending = ref(false);
 const setupRequired = ref(false);
 const connections = ref<MobileConnectionSummary[]>([]);
 const connectionsLoading = ref(false);
@@ -44,18 +46,18 @@ const statusTone = computed(() => {
 async function checkServer(profile: ServerProfile) {
   checkState.value = "checking";
   statusMessage.value = "";
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 8_000);
 
   try {
-    const response = await apiFetch(profile.baseUrl, "/api/auth/check", sessionToken.value, {
-      method: "GET",
-      credentials: "include",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
+    const auth = await withApiTimeout(async (signal) => {
+      const response = await apiFetch(profile.baseUrl, "/api/auth/check", sessionToken.value, {
+        method: "GET",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        signal,
+      });
+      if (!response.ok) throw new Error(`服务器返回 ${response.status}`);
+      return response.json() as Promise<AuthCheckResponse>;
     });
-    if (!response.ok) throw new Error(`服务器返回 ${response.status}`);
-    const auth = (await response.json()) as AuthCheckResponse;
     setupRequired.value = auth.setup_required;
     checkState.value = auth.setup_required || (auth.required && !auth.authenticated) ? "auth" : "ready";
     statusMessage.value = auth.setup_required
@@ -66,12 +68,7 @@ async function checkServer(profile: ServerProfile) {
     if (checkState.value === "ready") await loadConnections(profile);
   } catch (error) {
     checkState.value = "error";
-    statusMessage.value =
-      error instanceof DOMException && error.name === "AbortError"
-        ? "连接超时，请检查地址与网络"
-        : "无法访问服务器，请检查地址、HTTPS 证书与网络";
-  } finally {
-    window.clearTimeout(timeout);
+    statusMessage.value = error instanceof Error ? error.message : "无法访问服务器，请检查地址、HTTPS 证书与网络";
   }
 }
 
@@ -90,31 +87,35 @@ async function saveAndCheck() {
 }
 
 async function login() {
-  if (!savedProfile.value || !password.value) return;
+  const profile = savedProfile.value;
+  if (!profile || !password.value) return;
   loginPending.value = true;
   statusMessage.value = "";
 
   try {
-    const response = await apiFetch(savedProfile.value.baseUrl, "/api/auth/mobile-login", null, {
-      method: "POST",
-      credentials: "omit",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ password: password.value }),
+    const body = await withApiTimeout(async (signal) => {
+      const response = await apiFetch(profile.baseUrl, "/api/auth/mobile-login", null, {
+        method: "POST",
+        credentials: "omit",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ password: password.value }),
+        signal,
+      });
+      if (response.status === 401) throw new Error("密码不正确");
+      if (response.status === 429) {
+        const errorBody = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(errorBody?.error ?? "登录尝试过多，请稍后再试");
+      }
+      if (response.status === 409) throw new Error("请先在 DBX Web 中设置管理密码");
+      if (!response.ok) throw new Error(`登录失败（${response.status}）`);
+      return response.json() as Promise<MobileLoginResponse>;
     });
-    if (response.status === 401) throw new Error("密码不正确");
-    if (response.status === 429) {
-      const body = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(body?.error ?? "登录尝试过多，请稍后再试");
-    }
-    if (response.status === 409) throw new Error("请先在 DBX Web 中设置管理密码");
-    if (!response.ok) throw new Error(`登录失败（${response.status}）`);
 
-    const body = (await response.json()) as MobileLoginResponse;
     sessionToken.value = body.token;
     password.value = "";
     checkState.value = "ready";
     statusMessage.value = "登录成功；令牌仅保留在本次 App 运行期间";
-    await loadConnections(savedProfile.value);
+    await loadConnections(profile);
   } catch (error) {
     checkState.value = "auth";
     statusMessage.value = error instanceof Error ? error.message : "登录失败";
@@ -145,17 +146,46 @@ async function loadConnections(profile: ServerProfile) {
   }
 }
 
-function logout() {
-  if (savedProfile.value && sessionToken.value) {
-    void apiFetch(savedProfile.value.baseUrl, "/api/auth/logout", sessionToken.value, { method: "POST" });
-  }
+function handleMetadataAuthExpired() {
   sessionToken.value = null;
   connections.value = [];
   checkState.value = "auth";
-  statusMessage.value = "已退出当前移动会话";
+  statusMessage.value = "登录已失效，请重新登录";
 }
 
-function resetProfile() {
+async function revokeCurrentSession() {
+  const profile = savedProfile.value;
+  const token = sessionToken.value;
+  if (!profile || !token) return;
+  const response = await withApiTimeout((signal) =>
+    apiFetch(profile.baseUrl, "/api/auth/logout", token, {
+      method: "POST",
+      signal,
+    }),
+  );
+  // An unauthorized token is already unusable, so local removal is safe.
+  if (!response.ok && response.status !== 401) {
+    throw new Error(`服务器未确认注销（${response.status}）`);
+  }
+}
+
+async function logout() {
+  logoutPending.value = true;
+  try {
+    await revokeCurrentSession();
+    sessionToken.value = null;
+    connections.value = [];
+    checkState.value = "auth";
+    statusMessage.value = "服务端已撤销当前移动会话";
+  } catch (error) {
+    checkState.value = "error";
+    statusMessage.value = error instanceof Error ? `${error.message}，令牌已保留，可重试` : "注销失败，令牌已保留";
+  } finally {
+    logoutPending.value = false;
+  }
+}
+
+function clearProfileLocally() {
   clearServerProfile();
   savedProfile.value = null;
   serverName.value = "我的 DBX";
@@ -164,6 +194,20 @@ function resetProfile() {
   statusMessage.value = "";
   sessionToken.value = null;
   connections.value = [];
+}
+
+async function resetProfile() {
+  logoutPending.value = true;
+  try {
+    await revokeCurrentSession();
+    clearProfileLocally();
+  } catch (error) {
+    checkState.value = "error";
+    statusMessage.value =
+      error instanceof Error ? `${error.message}，未切换服务器，可重试` : "注销失败，未切换服务器";
+  } finally {
+    logoutPending.value = false;
+  }
 }
 
 function sectionLabel(section: MobileSection) {
@@ -263,7 +307,7 @@ onMounted(() => {
           <h3>{{ sectionLabel(activeSection) }}</h3>
         </div>
 
-        <div v-if="activeSection === 'connections'" class="connections-module">
+        <div v-if="activeSection === 'connections'">
           <div v-if="connectionsLoading" class="empty-module compact">
             <div class="module-icon">⌁</div><h4>正在读取连接目录</h4>
           </div>
@@ -271,22 +315,13 @@ onMounted(() => {
             <div class="module-icon">!</div><h4>{{ connectionsError }}</h4>
             <button class="inline-action" type="button" @click="loadConnections(savedProfile)">重试</button>
           </div>
-          <div v-else-if="connections.length === 0" class="empty-module compact">
-            <div class="module-icon">○</div><h4>服务器上还没有连接</h4>
-            <p>请先在桌面端或 DBX Web 中添加数据库连接。</p>
-          </div>
-          <article v-for="connection in connections" v-else :key="connection.id" class="connection-card">
-            <div class="connection-stripe" :style="{ background: connection.color || 'var(--acid)' }"></div>
-            <div class="connection-main">
-              <div class="connection-title">
-                <span>{{ connection.dbType }}</span><em v-if="connection.isProduction">PROD</em><em v-if="connection.readOnly">R/O</em>
-              </div>
-              <h4>{{ connection.name }}</h4>
-              <p>{{ connection.host }}:{{ connection.port }}<template v-if="connection.database"> / {{ connection.database }}</template></p>
-              <small v-if="connection.note">{{ connection.note }}</small>
-            </div>
-            <i aria-hidden="true">›</i>
-          </article>
+          <MetadataBrowser
+            v-else
+            :base-url="savedProfile.baseUrl"
+            :connections="connections"
+            :token="sessionToken"
+            @auth-expired="handleMetadataAuthExpired"
+          />
         </div>
         <div v-else-if="activeSection === 'query'" class="empty-module">
           <div class="module-icon">›_</div><h4>移动查询工作台</h4>
@@ -296,11 +331,11 @@ onMounted(() => {
           <div class="module-icon">↺</div><h4>最近活动</h4><p>查询历史和收藏 SQL 将与 DBX Server 保持一致。</p>
         </div>
         <div v-else class="settings-list">
-          <button v-if="sessionToken" type="button" @click="logout">
-            <span><b>退出登录</b><small>撤销当前手机上的访问令牌</small></span><i>→</i>
+          <button v-if="sessionToken" :disabled="logoutPending" type="button" @click="logout">
+            <span><b>{{ logoutPending ? "正在撤销会话" : "退出登录" }}</b><small>服务端确认后才会清除本地令牌</small></span><i>→</i>
           </button>
-          <button type="button" @click="resetProfile">
-            <span><b>更换服务器</b><small>清除当前设备上的节点配置</small></span><i>→</i>
+          <button :disabled="logoutPending" type="button" @click="resetProfile">
+            <span><b>更换服务器</b><small>先撤销当前会话，再清除节点配置</small></span><i>→</i>
           </button>
         </div>
       </section>

@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use argon2::password_hash::rand_core::OsRng;
@@ -41,6 +42,20 @@ pub struct MobileLoginResponse {
 const MAX_ATTEMPTS: u32 = 5;
 const LOCKOUT_SECS: u64 = 60;
 const MOBILE_SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+
+fn prune_expired_mobile_sessions(sessions: &mut HashMap<String, MobileSession>, now: std::time::Instant) {
+    sessions.retain(|_, session| session.expires_at > now);
+}
+
+fn rotate_sessions_after_password_change(
+    browser_sessions: &mut HashSet<String>,
+    mobile_sessions: &mut HashMap<String, MobileSession>,
+    new_browser_token: String,
+) {
+    browser_sessions.clear();
+    browser_sessions.insert(new_browser_token);
+    mobile_sessions.clear();
+}
 
 fn session_cookie_path(state: &WebState) -> &str {
     state.public_base_path.as_str()
@@ -170,8 +185,13 @@ pub async fn mobile_login(
     }
 
     let token = uuid::Uuid::new_v4().to_string();
-    let expires_at_instant = std::time::Instant::now() + std::time::Duration::from_secs(MOBILE_SESSION_TTL_SECS);
-    state.mobile_sessions.write().await.insert(token.clone(), MobileSession { expires_at: expires_at_instant });
+    let now = std::time::Instant::now();
+    let expires_at_instant = now + std::time::Duration::from_secs(MOBILE_SESSION_TTL_SECS);
+    {
+        let mut sessions = state.mobile_sessions.write().await;
+        prune_expired_mobile_sessions(&mut sessions, now);
+        sessions.insert(token.clone(), MobileSession { expires_at: expires_at_instant });
+    }
     let expires_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -260,7 +280,18 @@ pub async fn change_password(
     state.app.storage.save_password_hash(&new_hash).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     *state.password_hash.write().await = Some(new_hash);
 
-    Ok((StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response())
+    // A password change is a security boundary: revoke every existing browser
+    // and mobile session. Replace the caller's browser session so the page does
+    // not remain authenticated locally with a server-side-invalid cookie.
+    let token = uuid::Uuid::new_v4().to_string();
+    {
+        let mut sessions = state.sessions.write().await;
+        let mut mobile_sessions = state.mobile_sessions.write().await;
+        rotate_sessions_after_password_change(&mut sessions, &mut mobile_sessions, token.clone());
+    }
+
+    let cookie = format!("dbx_session={token}; Path={}; HttpOnly; SameSite=Lax", session_cookie_path(&state));
+    Ok((StatusCode::OK, [("set-cookie", cookie.as_str())], Json(serde_json::json!({"ok": true}))).into_response())
 }
 
 pub async fn logout(State(state): State<Arc<WebState>>, req: Request<axum::body::Body>) -> Response {
@@ -351,9 +382,17 @@ pub async fn auth_middleware(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::time::{Duration, Instant};
+
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::{api_path_suffix, middleware_api_path_suffix, session_token_from_headers};
+    use crate::state::MobileSession;
+
+    use super::{
+        api_path_suffix, middleware_api_path_suffix, prune_expired_mobile_sessions,
+        rotate_sessions_after_password_change, session_token_from_headers,
+    };
 
     #[test]
     fn api_path_suffix_handles_root_api_paths() {
@@ -393,5 +432,38 @@ mod tests {
         headers.insert("authorization", HeaderValue::from_static("Bearer two tokens"));
 
         assert_eq!(session_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn expired_mobile_sessions_are_pruned_in_bulk() {
+        let now = Instant::now();
+        let mut sessions = HashMap::from([
+            ("expired".to_string(), MobileSession { expires_at: now - Duration::from_secs(1) }),
+            ("active".to_string(), MobileSession { expires_at: now + Duration::from_secs(60) }),
+        ]);
+
+        prune_expired_mobile_sessions(&mut sessions, now);
+
+        assert!(!sessions.contains_key("expired"));
+        assert!(sessions.contains_key("active"));
+    }
+
+    #[test]
+    fn password_change_revokes_old_browser_and_mobile_sessions() {
+        let now = Instant::now();
+        let mut browser_sessions = HashSet::from(["caller-session".to_string(), "other-browser".to_string()]);
+        let mut mobile_sessions = HashMap::from([
+            ("phone".to_string(), MobileSession { expires_at: now + Duration::from_secs(60) }),
+            ("tablet".to_string(), MobileSession { expires_at: now + Duration::from_secs(60) }),
+        ]);
+
+        rotate_sessions_after_password_change(
+            &mut browser_sessions,
+            &mut mobile_sessions,
+            "replacement-session".to_string(),
+        );
+
+        assert_eq!(browser_sessions, HashSet::from(["replacement-session".to_string()]));
+        assert!(mobile_sessions.is_empty());
     }
 }
