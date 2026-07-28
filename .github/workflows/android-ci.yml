@@ -1,0 +1,74 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main, feature/android-mvp]
+    paths:
+      - "apps/android/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/android-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/android/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/android-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Android unit tests
+        run: pnpm --filter @dbx-app/android test
+
+      - name: Build Android web assets
+        run: pnpm --filter @dbx-app/android build
+
+      - name: Sync Capacitor
+        run: pnpm --filter @dbx-app/android exec cap sync android
+
+      - name: Assemble debug APK
+        working-directory: apps/android/android
+        run: ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: dbx-mobile-debug-${{ github.sha }}
+          path: apps/android/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
