@@ -1,0 +1,445 @@
+use std::sync::Arc;
+
+use axum::extract::{Path, State};
+use axum::response::sse::{Event, Sse};
+use axum::Json;
+use dbx_core::transfer::{self, TransferRequest, TransferStatus};
+use futures::stream::Stream;
+use serde::Deserialize;
+use tokio::time::{sleep, Duration};
+
+use crate::error::AppError;
+use crate::sse::{TransferProgressChannel, TransferReplayEventKind};
+use crate::state::WebState;
+
+const COMPLETED_TRANSFER_CHANNEL_TTL: Duration = Duration::from_secs(60);
+
+fn send_transfer_progress(channel: &TransferProgressChannel, progress: &transfer::TransferProgress) {
+    if let Ok(json) = serde_json::to_string(progress) {
+        let kind = if progress.terminal {
+            TransferReplayEventKind::Terminal
+        } else if matches!(&progress.status, TransferStatus::Error) {
+            TransferReplayEventKind::Failure
+        } else {
+            TransferReplayEventKind::Progress
+        };
+        channel.send(json, kind);
+    }
+}
+
+fn terminal_transfer_error(req: &TransferRequest, error: impl ToString) -> transfer::TransferProgress {
+    transfer::TransferProgress {
+        transfer_id: req.transfer_id.clone(),
+        table: String::new(),
+        table_index: 0,
+        total_tables: req.tables.len(),
+        rows_transferred: 0,
+        total_rows: None,
+        status: TransferStatus::Error,
+        error: Some(error.to_string()),
+        terminal: true,
+    }
+}
+
+async fn finish_transfer_channel(state: &Arc<WebState>, transfer_id: &str, channel: &Arc<TransferProgressChannel>) {
+    transfer::clear_cancelled(transfer_id).await;
+    let state = state.clone();
+    let transfer_id = transfer_id.to_string();
+    let channel = channel.clone();
+    tokio::spawn(async move {
+        sleep(COMPLETED_TRANSFER_CHANNEL_TTL).await;
+        let mut channels = state.transfer_progress_channels.write().await;
+        if channels.get(&transfer_id).is_some_and(|current| Arc::ptr_eq(current, &channel)) {
+            channels.remove(&transfer_id);
+        }
+    });
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartTransferRequest {
+    pub request: TransferRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelTransferRequest {
+    pub transfer_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewTransferOwnershipRequest {
+    pub request: TransferRequest,
+}
+
+pub async fn start_transfer(
+    State(state): State<Arc<WebState>>,
+    Json(body): Json<StartTransferRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let req = body.request;
+    transfer::validate_transfer_target_table_names(&req).map_err(AppError::from)?;
+
+    // Reject transfer early if the target connection is read-only
+    if let Some(name) = dbx_core::query::connection_readonly_name(&state.app, &req.target_connection_id).await {
+        return Err(AppError::from(format!(
+            "Read-only mode: target connection '{}' has read-only protection enabled. Transfer blocked.",
+            name
+        )));
+    }
+
+    let transfer_id = req.transfer_id.clone();
+
+    // Keep bounded replay state so a web EventSource opened after this POST
+    // still receives early table failures and the terminal result.
+    let progress_channel = Arc::new(TransferProgressChannel::new());
+    state.transfer_progress_channels.write().await.insert(transfer_id.clone(), progress_channel.clone());
+
+    let app = state.app.clone();
+    let state_clone = state.clone();
+
+    tokio::spawn(async move {
+        let source_db_type = match transfer::get_db_type(&app, &req.source_connection_id).await {
+            Ok(t) => t,
+            Err(e) => {
+                send_transfer_progress(&progress_channel, &terminal_transfer_error(&req, e));
+                finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                return;
+            }
+        };
+        let target_db_type = match transfer::get_db_type(&app, &req.target_connection_id).await {
+            Ok(t) => t,
+            Err(e) => {
+                send_transfer_progress(&progress_channel, &terminal_transfer_error(&req, e));
+                finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                return;
+            }
+        };
+
+        let source_pool_key = match app.get_or_create_pool(&req.source_connection_id, Some(&req.source_database)).await
+        {
+            Ok(k) => k,
+            Err(e) => {
+                send_transfer_progress(&progress_channel, &terminal_transfer_error(&req, e));
+                finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                return;
+            }
+        };
+        let target_pool_key = match app.get_or_create_pool(&req.target_connection_id, Some(&req.target_database)).await
+        {
+            Ok(k) => k,
+            Err(e) => {
+                send_transfer_progress(&progress_channel, &terminal_transfer_error(&req, e));
+                finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                return;
+            }
+        };
+
+        let tables = req.tables.clone();
+        // Sort by FK dependency so referenced tables are transferred first.
+        let tables = transfer::sort_tables_by_fk_dependency(
+            &app,
+            &req.source_connection_id,
+            &req.source_database,
+            &req.source_schema,
+            &tables,
+            true,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            log::warn!("[transfer] failed to sort tables by FK dependency, using original order: {e}");
+            tables
+        });
+        let mut failed_tables: Vec<String> = Vec::new();
+
+        if matches!(source_db_type, dbx_core::models::connection::DatabaseType::Postgres)
+            && matches!(target_db_type, dbx_core::models::connection::DatabaseType::Postgres)
+        {
+            let progress_channel_clone = progress_channel.clone();
+            match transfer::transfer_postgres_schema_dependencies(
+                &app,
+                &req,
+                &source_pool_key,
+                &target_pool_key,
+                |progress| {
+                    send_transfer_progress(&progress_channel_clone, &progress);
+                },
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err(e) if e == "Cancelled" => {
+                    let progress = transfer::TransferProgress {
+                        transfer_id: req.transfer_id.clone(),
+                        table: "schema dependencies".to_string(),
+                        table_index: 0,
+                        total_tables: tables.len(),
+                        rows_transferred: 0,
+                        total_rows: None,
+                        status: TransferStatus::Cancelled,
+                        error: None,
+                        terminal: true,
+                    };
+                    send_transfer_progress(&progress_channel, &progress);
+                    finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                    return;
+                }
+                Err(e) => {
+                    let progress = transfer::TransferProgress {
+                        transfer_id: req.transfer_id.clone(),
+                        table: "schema dependencies".to_string(),
+                        table_index: 0,
+                        total_tables: tables.len(),
+                        rows_transferred: 0,
+                        total_rows: None,
+                        status: TransferStatus::Error,
+                        error: Some(e),
+                        terminal: true,
+                    };
+                    send_transfer_progress(&progress_channel, &progress);
+                    finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                    return;
+                }
+            }
+        }
+
+        for (i, table) in tables.iter().enumerate() {
+            if transfer::is_cancelled(&req.transfer_id).await {
+                let progress = transfer::TransferProgress {
+                    transfer_id: req.transfer_id.clone(),
+                    table: table.clone(),
+                    table_index: i,
+                    total_tables: tables.len(),
+                    rows_transferred: 0,
+                    total_rows: None,
+                    status: TransferStatus::Cancelled,
+                    error: None,
+                    terminal: true,
+                };
+                send_transfer_progress(&progress_channel, &progress);
+                finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                return;
+            }
+
+            let progress_channel_clone = progress_channel.clone();
+            let mut last_rows_transferred = 0_u64;
+            let mut last_total_rows = None;
+            let result = transfer::transfer_table(
+                &app,
+                &req,
+                table,
+                i,
+                &source_db_type,
+                &target_db_type,
+                &source_pool_key,
+                &target_pool_key,
+                |progress| {
+                    last_rows_transferred = progress.rows_transferred;
+                    last_total_rows = progress.total_rows;
+                    send_transfer_progress(&progress_channel_clone, &progress);
+                },
+            )
+            .await;
+
+            match result {
+                Ok(rows) => {
+                    let progress = transfer::TransferProgress {
+                        transfer_id: req.transfer_id.clone(),
+                        table: table.clone(),
+                        table_index: i,
+                        total_tables: tables.len(),
+                        rows_transferred: rows,
+                        total_rows: last_total_rows.or(Some(rows)),
+                        status: TransferStatus::TableDone,
+                        error: None,
+                        terminal: false,
+                    };
+                    send_transfer_progress(&progress_channel, &progress);
+                }
+                Err(e) => {
+                    if e == "Cancelled" {
+                        let progress = transfer::TransferProgress {
+                            transfer_id: req.transfer_id.clone(),
+                            table: table.clone(),
+                            table_index: i,
+                            total_tables: tables.len(),
+                            rows_transferred: 0,
+                            total_rows: None,
+                            status: TransferStatus::Cancelled,
+                            error: None,
+                            terminal: true,
+                        };
+                        send_transfer_progress(&progress_channel, &progress);
+                        finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                        return;
+                    }
+                    failed_tables.push(table.clone());
+                    let progress = transfer::TransferProgress {
+                        transfer_id: req.transfer_id.clone(),
+                        table: table.clone(),
+                        table_index: i,
+                        total_tables: tables.len(),
+                        rows_transferred: last_rows_transferred,
+                        total_rows: last_total_rows,
+                        status: TransferStatus::Error,
+                        error: Some(e),
+                        terminal: false,
+                    };
+                    send_transfer_progress(&progress_channel, &progress);
+                }
+            }
+        }
+
+        if matches!(source_db_type, dbx_core::models::connection::DatabaseType::Postgres)
+            && matches!(target_db_type, dbx_core::models::connection::DatabaseType::Postgres)
+        {
+            let progress_channel_clone = progress_channel.clone();
+            match transfer::transfer_postgres_schema_objects(
+                &app,
+                &req,
+                &source_pool_key,
+                &target_pool_key,
+                |progress| {
+                    send_transfer_progress(&progress_channel_clone, &progress);
+                },
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err(e) if e == "Cancelled" => {
+                    let progress = transfer::TransferProgress {
+                        transfer_id: req.transfer_id.clone(),
+                        table: "schema objects".to_string(),
+                        table_index: tables.len(),
+                        total_tables: tables.len(),
+                        rows_transferred: 0,
+                        total_rows: None,
+                        status: TransferStatus::Cancelled,
+                        error: None,
+                        terminal: true,
+                    };
+                    send_transfer_progress(&progress_channel, &progress);
+                    finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+                    return;
+                }
+                Err(e) => {
+                    failed_tables.push("schema objects".to_string());
+                    let progress = transfer::TransferProgress {
+                        transfer_id: req.transfer_id.clone(),
+                        table: "schema objects".to_string(),
+                        table_index: tables.len(),
+                        total_tables: tables.len(),
+                        rows_transferred: 0,
+                        total_rows: None,
+                        status: TransferStatus::Error,
+                        error: Some(e),
+                        terminal: false,
+                    };
+                    send_transfer_progress(&progress_channel, &progress);
+                }
+            }
+        }
+
+        // Send done
+        let done = transfer::TransferProgress {
+            transfer_id: req.transfer_id.clone(),
+            table: String::new(),
+            table_index: tables.len(),
+            total_tables: tables.len(),
+            rows_transferred: 0,
+            total_rows: None,
+            status: if failed_tables.is_empty() { TransferStatus::Done } else { TransferStatus::Error },
+            error: if failed_tables.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{} table(s) failed: {}",
+                    failed_tables.len(),
+                    failed_tables.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+                ))
+            },
+            terminal: true,
+        };
+        send_transfer_progress(&progress_channel, &done);
+        finish_transfer_channel(&state_clone, &req.transfer_id, &progress_channel).await;
+    });
+
+    Ok(Json(serde_json::json!({ "transferId": transfer_id })))
+}
+
+pub async fn preview_transfer_ownership(
+    State(state): State<Arc<WebState>>,
+    Json(body): Json<PreviewTransferOwnershipRequest>,
+) -> Result<Json<dbx_core::transfer::TransferOwnershipPreview>, AppError> {
+    let req = body.request;
+    transfer::validate_transfer_target_table_names(&req).map_err(AppError::from)?;
+    let source_db_type = transfer::get_db_type(&state.app, &req.source_connection_id).await.map_err(AppError::from)?;
+    let target_db_type = transfer::get_db_type(&state.app, &req.target_connection_id).await.map_err(AppError::from)?;
+    let source_pool_key = state
+        .app
+        .get_or_create_pool(&req.source_connection_id, Some(&req.source_database))
+        .await
+        .map_err(AppError::from)?;
+    let target_pool_key = state
+        .app
+        .get_or_create_pool(&req.target_connection_id, Some(&req.target_database))
+        .await
+        .map_err(AppError::from)?;
+    let preview = transfer::preview_transfer_ownership(
+        &state.app,
+        &req,
+        &source_db_type,
+        &target_db_type,
+        &source_pool_key,
+        &target_pool_key,
+    )
+    .await
+    .map_err(AppError::from)?;
+    Ok(Json(preview))
+}
+
+pub async fn transfer_progress(
+    State(state): State<Arc<WebState>>,
+    Path(transfer_id): Path<String>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
+    let channels = state.transfer_progress_channels.read().await;
+    let channel =
+        channels.get(&transfer_id).cloned().ok_or_else(|| AppError::from("Transfer not found".to_string()))?;
+    drop(channels);
+    Ok(crate::sse::sse_from_transfer_channel(channel))
+}
+
+pub async fn cancel_transfer(
+    State(_state): State<Arc<WebState>>,
+    Json(req): Json<CancelTransferRequest>,
+) -> Json<serde_json::Value> {
+    transfer::set_cancelled(&req.transfer_id).await;
+    Json(serde_json::json!({ "cancelled": true }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SortTablesByFkRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub schema: String,
+    pub tables: Vec<String>,
+    pub parents_first: bool,
+}
+
+pub async fn sort_tables_by_fk_dependency(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<SortTablesByFkRequest>,
+) -> Result<Json<Vec<String>>, AppError> {
+    transfer::sort_tables_by_fk_dependency(
+        &state.app,
+        &req.connection_id,
+        &req.database,
+        &req.schema,
+        &req.tables,
+        req.parents_first,
+    )
+    .await
+    .map(Json)
+    .map_err(AppError::from)
+}
