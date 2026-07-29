@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [main, feature/android-mvp]
+    branches: [main, "feature/android-*"]
     paths:
       - "apps/android/**"
       - "package.json"
@@ -62,9 +62,9 @@ jobs:
       - name: Sync Capacitor
         run: pnpm --filter @dbx-app/android exec cap sync android
 
-      - name: Assemble debug APK
+      - name: Assemble debug and instrumentation APKs
         working-directory: apps/android/android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug :app:assembleDebugAndroidTest
 
       - uses: actions/upload-artifact@v6
         with:

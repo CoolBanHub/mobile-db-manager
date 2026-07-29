@@ -20,7 +20,9 @@ use crate::history::{
 };
 use crate::models::connection::{ConnectionConfig, DatabaseConnectionInfo, DatabaseType, TransportLayerConfig};
 use crate::prompt_template::PromptTemplate;
-use crate::saved_sql::{SavedSqlFile, SavedSqlFolder, SavedSqlLibrary};
+use crate::saved_sql::{
+    SavedSqlFile, SavedSqlFolder, SavedSqlLibrary, SavedSqlSearchRequest, SavedSqlSearchResult, SavedSqlSort,
+};
 
 const SSH_TUNNEL_SECRET_PREFIX: &str = "ssh_tunnels.";
 const TRANSPORT_LAYER_SECRET_PREFIX: &str = "transport_layers.";
@@ -1006,6 +1008,35 @@ impl Storage {
 
     pub async fn clear_history(&self) -> Result<(), String> {
         self.with_conn(|conn| conn.execute("DELETE FROM history", []).map(|_| ()).map_err(|e| e.to_string())).await
+    }
+
+    pub async fn clear_history_by_activity_kind(&self, activity_kind: &str) -> Result<(), String> {
+        let activity_kind = activity_kind.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "DELETE FROM history WHERE activity_kind = ?1 OR (?1 = 'query' AND activity_kind = '')",
+                [activity_kind],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
+        .await
+    }
+
+    pub async fn load_history_entry(&self, id: &str) -> Result<Option<HistoryEntry>, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                "SELECT id, connection_name, database, sql_text, executed_at, execution_time_ms, success, \
+                 error, activity_kind, connection_id, operation, target, affected_rows, rollback_sql, details_json \
+                 FROM history WHERE id = ?1",
+                [id],
+                map_history_row,
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+        })
+        .await
     }
 
     pub async fn delete_history_entry(&self, id: &str) -> Result<(), String> {
@@ -2555,6 +2586,83 @@ impl Storage {
         .await
     }
 
+    pub async fn search_saved_sql_files(&self, request: SavedSqlSearchRequest) -> Result<SavedSqlSearchResult, String> {
+        self.with_conn(move |conn| {
+            let page = request.page.max(1);
+            let page_size = if request.page_size == 0 { 50 } else { request.page_size.min(200) };
+            let mut filters = Vec::new();
+            let mut values = Vec::<Value>::new();
+            let query = request.query.trim().to_lowercase();
+            if !query.is_empty() {
+                let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+                let pattern = Value::Text(format!("%{escaped}%"));
+                filters.push(
+                    "(LOWER(name) LIKE ? ESCAPE '\\' \
+                      OR LOWER(database_name) LIKE ? ESCAPE '\\' \
+                      OR LOWER(COALESCE(schema_name, '')) LIKE ? ESCAPE '\\' \
+                      OR LOWER(sql_text) LIKE ? ESCAPE '\\')"
+                        .to_string(),
+                );
+                values.extend(std::iter::repeat_n(pattern, 4));
+            }
+            if !request.connection_ids.is_empty() {
+                filters.push(format!(
+                    "connection_id IN ({})",
+                    std::iter::repeat_n("?", request.connection_ids.len()).collect::<Vec<_>>().join(", ")
+                ));
+                values.extend(request.connection_ids.into_iter().map(Value::Text));
+            }
+            let where_sql =
+                if filters.is_empty() { String::new() } else { format!(" WHERE {}", filters.join(" AND ")) };
+
+            let count_sql = format!("SELECT COUNT(*) FROM saved_sql_files{where_sql}");
+            let total = conn
+                .query_row(&count_sql, params_from_iter(values.iter()), |row| row.get::<_, u64>(0))
+                .map_err(|e| e.to_string())?;
+
+            let order_sql = match request.sort {
+                SavedSqlSort::UpdatedDesc => "updated_at DESC, name COLLATE NOCASE ASC, id ASC",
+                SavedSqlSort::UpdatedAsc => "updated_at ASC, name COLLATE NOCASE ASC, id ASC",
+                SavedSqlSort::NameAsc => "name COLLATE NOCASE ASC, updated_at DESC, id ASC",
+                SavedSqlSort::NameDesc => "name COLLATE NOCASE DESC, updated_at DESC, id ASC",
+                SavedSqlSort::CreatedDesc => "created_at DESC, name COLLATE NOCASE ASC, id ASC",
+            };
+            let select_sql = format!(
+                "SELECT id, connection_id, folder_id, name, database_name, schema_name, \
+                 order_index, open_count, opened_at, created_at, updated_at \
+                 FROM saved_sql_files{where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?"
+            );
+            let mut page_values = values;
+            page_values.push(Value::Integer(i64::from(page_size)));
+            page_values.push(Value::Integer(i64::from(page.saturating_sub(1)) * i64::from(page_size)));
+            let mut stmt = conn.prepare(&select_sql).map_err(|e| e.to_string())?;
+            let files = stmt
+                .query_map(params_from_iter(page_values.iter()), |row| {
+                    Ok(SavedSqlFile {
+                        id: row.get(0)?,
+                        connection_id: row.get(1)?,
+                        folder_id: row.get(2)?,
+                        name: row.get(3)?,
+                        database: row.get(4)?,
+                        schema: row.get(5)?,
+                        sql: String::new(),
+                        sql_loaded: false,
+                        order_index: row.get(6)?,
+                        open_count: row.get(7)?,
+                        opened_at: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+
+            Ok(SavedSqlSearchResult { files, total, page, page_size })
+        })
+        .await
+    }
+
     pub async fn save_saved_sql_folder(&self, folder: &SavedSqlFolder) -> Result<(), String> {
         let folder = folder.clone();
         self.with_conn(move |conn| {
@@ -3454,7 +3562,7 @@ mod tests {
     use crate::models::connection::{
         ConnectionConfig, DatabaseConnectionInfo, DatabaseType, SshTunnelConfig, TransportLayerConfig,
     };
-    use crate::saved_sql::SavedSqlFile;
+    use crate::saved_sql::{SavedSqlFile, SavedSqlSearchRequest, SavedSqlSort};
     use rusqlite::Connection;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3494,6 +3602,26 @@ mod tests {
             rollback_sql: None,
             details_json: None,
         }
+    }
+
+    #[tokio::test]
+    async fn history_kind_clear_and_single_entry_load_preserve_other_activity() {
+        let path = temp_db_path("history-kind-clear");
+        let storage = Storage::open(&path).await.unwrap();
+        let query = history_entry("query-1", "conn-a", "Primary", "sales", "select 1", "2026-07-18T01:00:00Z", true);
+        let mut backup =
+            history_entry("backup-1", "conn-a", "Primary", "sales", "backup database", "2026-07-18T02:00:00Z", true);
+        backup.activity_kind = "backup".to_string();
+        storage.save_history_entry(&query).await.unwrap();
+        storage.save_history_entry(&backup).await.unwrap();
+
+        assert_eq!(storage.load_history_entry("query-1").await.unwrap().unwrap().sql, "select 1");
+        assert!(storage.load_history_entry("missing").await.unwrap().is_none());
+
+        storage.clear_history_by_activity_kind("query").await.unwrap();
+        assert!(storage.load_history_entry("query-1").await.unwrap().is_none());
+        assert_eq!(storage.load_history_entry("backup-1").await.unwrap().unwrap().activity_kind, "backup");
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
@@ -4726,6 +4854,71 @@ mod tests {
         let loaded = storage.load_saved_sql_file("sql-1").await.unwrap().unwrap();
         assert_eq!(loaded.sql, file.sql);
         assert!(loaded.sql_loaded);
+    }
+
+    #[tokio::test]
+    async fn saved_sql_search_filters_sql_text_sorts_and_pages_on_server() {
+        let path = temp_db_path("saved-sql-search");
+        let storage = Storage::open(&path).await.unwrap();
+        for (id, connection_id, name, sql, updated_at) in [
+            ("sql-1", "conn-1", "alpha.sql", "SELECT * FROM invoices", "2026-06-01T00:00:00Z"),
+            ("sql-2", "conn-1", "zeta.sql", "SELECT * FROM invoices WHERE paid = 0", "2026-06-03T00:00:00Z"),
+            ("sql-3", "conn-2", "other.sql", "SELECT * FROM invoices", "2026-06-04T00:00:00Z"),
+            ("sql-4", "conn-1", "literal.sql", "SELECT 100 AS percent", "2026-06-02T00:00:00Z"),
+        ] {
+            storage
+                .save_saved_sql_file(&SavedSqlFile {
+                    id: id.to_string(),
+                    connection_id: connection_id.to_string(),
+                    folder_id: None,
+                    name: name.to_string(),
+                    database: "main".to_string(),
+                    schema: None,
+                    sql: sql.to_string(),
+                    sql_loaded: true,
+                    order_index: 0,
+                    open_count: 0,
+                    opened_at: None,
+                    created_at: updated_at.to_string(),
+                    updated_at: updated_at.to_string(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let first_page = storage
+            .search_saved_sql_files(SavedSqlSearchRequest {
+                query: "invoices".to_string(),
+                connection_ids: vec!["conn-1".to_string()],
+                sort: SavedSqlSort::UpdatedDesc,
+                page: 1,
+                page_size: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(first_page.total, 2);
+        assert_eq!(first_page.files.len(), 1);
+        assert_eq!(first_page.files[0].id, "sql-2");
+        assert_eq!(first_page.files[0].sql, "");
+        assert!(!first_page.files[0].sql_loaded);
+
+        let second_page = storage
+            .search_saved_sql_files(SavedSqlSearchRequest {
+                query: "invoices".to_string(),
+                connection_ids: vec!["conn-1".to_string()],
+                sort: SavedSqlSort::NameAsc,
+                page: 2,
+                page_size: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(second_page.files[0].name, "zeta.sql");
+
+        let escaped_wildcard = storage
+            .search_saved_sql_files(SavedSqlSearchRequest { query: "100%".to_string(), ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(escaped_wildcard.total, 0);
     }
 
     #[tokio::test]

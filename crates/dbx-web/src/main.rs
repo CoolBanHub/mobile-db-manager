@@ -269,8 +269,22 @@ async fn main() {
         .route("/connection/save", post(routes::connection::save_connections))
         .route("/connection/list", get(routes::connection::load_connections))
         .route("/mobile/connections", get(routes::mobile::load_connections))
+        .route(
+            "/mobile/connections/{id}",
+            get(routes::mobile::load_connection_editor).delete(routes::mobile::delete_mobile_connection),
+        )
+        .route("/mobile/connections/save", post(routes::mobile::save_mobile_connection))
+        .route("/mobile/connections/test", post(routes::mobile::test_mobile_connection))
         .route("/mobile/query", post(routes::mobile::execute_read_only_query))
-        .route("/mobile/history", get(routes::mobile::load_query_history))
+        .route("/mobile/query/{execution_id}", delete(routes::mobile::cancel_read_only_query))
+        .route("/mobile/table-data", post(routes::mobile::load_mobile_table_data))
+        .route("/mobile/table-template", post(routes::mobile::build_mobile_table_template))
+        .route("/mobile/history", get(routes::mobile::load_query_history).delete(routes::mobile::clear_query_history))
+        .route("/mobile/history/search", post(routes::mobile::search_query_history))
+        .route(
+            "/mobile/history/{id}",
+            get(routes::mobile::load_query_history_entry).delete(routes::mobile::delete_query_history_entry),
+        )
         .route(
             "/mobile/saved-sql",
             get(routes::mobile::load_saved_sql_library).post(routes::mobile::save_saved_sql_file),
@@ -279,6 +293,8 @@ async fn main() {
             "/mobile/saved-sql/{id}",
             get(routes::mobile::load_saved_sql_file).delete(routes::mobile::delete_saved_sql_file),
         )
+        .route("/mobile/saved-sql/folders", post(routes::mobile::save_saved_sql_folder))
+        .route("/mobile/saved-sql/folders/{id}", delete(routes::mobile::delete_saved_sql_folder))
         .route("/connection/mcp/add", post(routes::connection::mcp_add_connection))
         .route("/connection/mcp/remove", post(routes::connection::mcp_remove_connection))
         .route("/plugins", get(routes::plugins::list_plugins))
@@ -606,6 +622,7 @@ async fn main() {
             "/saved-sql",
             get(routes::saved_sql::load_saved_sql_library).post(routes::saved_sql::save_saved_sql_file),
         )
+        .route("/saved-sql/search", post(routes::saved_sql::search_saved_sql_files))
         .route(
             "/saved-sql/{id}",
             get(routes::saved_sql::load_saved_sql_file).delete(routes::saved_sql::delete_saved_sql_file),

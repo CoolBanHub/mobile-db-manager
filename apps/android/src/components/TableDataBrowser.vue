@@ -1,0 +1,783 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { exportQueryResult, type QueryExportFormat } from "../lib/queryExport";
+import { ApiError, apiPostJson, type MobileQueryDraft, type MobileTableFilter, type MobileTableFilterOperator, type MobileTableDataResponse, type MobileTableSort, type MobileTableTarget } from "../lib/mobileApi";
+
+const props = defineProps<{
+  baseUrl: string;
+  token: string | null;
+  target: MobileTableTarget;
+}>();
+const emit = defineEmits<{
+  authExpired: [];
+  back: [];
+  openQuery: [draft: Omit<MobileQueryDraft, "nonce">];
+}>();
+
+const response = ref<MobileTableDataResponse | null>(null);
+const loading = ref(true);
+const error = ref("");
+const pageSize = ref(30);
+const filters = ref<MobileTableFilter[]>([]);
+const sort = ref<MobileTableSort | null>(null);
+const filterColumn = ref("");
+const filterOperator = ref<MobileTableFilterOperator>("contains");
+const filterValue = ref("");
+const exportFormat = ref<QueryExportFormat>("csv");
+const exporting = ref(false);
+const interactionStatus = ref("");
+const columnWidths = ref<Record<number, number>>({});
+const selectedCell = ref<{
+  rowIndex: number;
+  pageRowIndex: number;
+  columnIndex: number;
+  value: unknown;
+} | null>(null);
+const filterOperators: { value: MobileTableFilterOperator; label: string; needsValue: boolean }[] = [
+  { value: "contains", label: "包含", needsValue: true },
+  { value: "equals", label: "等于", needsValue: true },
+  { value: "notEquals", label: "不等于", needsValue: true },
+  { value: "startsWith", label: "开头是", needsValue: true },
+  { value: "endsWith", label: "结尾是", needsValue: true },
+  { value: "greaterThan", label: "大于", needsValue: true },
+  { value: "greaterThanOrEqual", label: "大于等于", needsValue: true },
+  { value: "lessThan", label: "小于", needsValue: true },
+  { value: "lessThanOrEqual", label: "小于等于", needsValue: true },
+  { value: "isNull", label: "为空", needsValue: false },
+  { value: "isNotNull", label: "不为空", needsValue: false },
+];
+const filterNeedsValue = computed(() => filterOperators.find((item) => item.value === filterOperator.value)?.needsValue ?? true);
+let requestId = 0;
+let controller: AbortController | null = null;
+
+function displayValue(value: unknown) {
+  if (value === null) return "NULL";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+async function loadPage(offset: number) {
+  const currentRequest = ++requestId;
+  controller?.abort();
+  controller = new AbortController();
+  loading.value = true;
+  error.value = "";
+  try {
+    const page = await apiPostJson<MobileTableDataResponse>(
+      props.baseUrl,
+      "/api/mobile/table-data",
+      props.token,
+      {
+        ...props.target,
+        offset,
+        limit: pageSize.value,
+        filters: filters.value,
+        sort: sort.value,
+      },
+      { signal: controller.signal, timeoutMs: 45_000 },
+    );
+    if (currentRequest === requestId) {
+      response.value = page;
+      selectedCell.value = null;
+      interactionStatus.value = "";
+      if (offset === 0) columnWidths.value = {};
+    }
+  } catch (reason) {
+    if (currentRequest !== requestId) return;
+    if (reason instanceof ApiError && reason.status === 401) emit("authExpired");
+    else if (reason instanceof DOMException && reason.name === "AbortError") error.value = "数据请求已取消或超时";
+    else error.value = reason instanceof Error ? reason.message : "表数据加载失败";
+  } finally {
+    if (currentRequest === requestId) {
+      loading.value = false;
+      controller = null;
+    }
+  }
+}
+
+function applyFilter() {
+  if (!filterColumn.value || (filterNeedsValue.value && !filterValue.value)) return;
+  filters.value.push({
+    column: filterColumn.value,
+    operator: filterOperator.value,
+    value: filterNeedsValue.value ? filterValue.value : "",
+  });
+  filterValue.value = "";
+  void loadPage(0);
+}
+
+function removeFilter(index: number) {
+  filters.value.splice(index, 1);
+  void loadPage(0);
+}
+
+function cycleSort(column: string) {
+  if (sort.value?.column !== column) sort.value = { column, direction: "asc" };
+  else if (sort.value.direction === "asc") sort.value = { column, direction: "desc" };
+  else sort.value = null;
+  void loadPage(0);
+}
+
+function sortIndicator(column: string) {
+  if (sort.value?.column !== column) return "↕";
+  return sort.value.direction === "asc" ? "↑" : "↓";
+}
+
+function filterSummary(filter: MobileTableFilter) {
+  const label = filterOperators.find((item) => item.value === filter.operator)?.label ?? filter.operator;
+  return filter.value ? `${filter.column} ${label} ${filter.value}` : `${filter.column} ${label}`;
+}
+
+function openQuery() {
+  if (!response.value) return;
+  emit("openQuery", {
+    connectionId: props.target.connectionId,
+    database: props.target.database,
+    schema: props.target.schema,
+    sql: response.value.selectTemplate,
+  });
+}
+
+function cellText(value: unknown) {
+  if (value === null) return "NULL";
+  if (value === undefined) return "";
+  return typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+}
+
+async function copyText(value: string, success: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const input = document.createElement("textarea");
+      input.value = value;
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.append(input);
+      input.select();
+      if (!document.execCommand("copy")) throw new Error("系统拒绝了复制操作");
+      input.remove();
+    }
+    interactionStatus.value = success;
+  } catch (reason) {
+    error.value = reason instanceof Error ? `复制失败：${reason.message}` : "复制失败";
+  }
+}
+
+function openCell(pageRowIndex: number, columnIndex: number, value: unknown) {
+  selectedCell.value = {
+    rowIndex: (response.value?.offset ?? 0) + pageRowIndex,
+    pageRowIndex,
+    columnIndex,
+    value,
+  };
+}
+
+function copySelectedCell() {
+  if (!selectedCell.value) return;
+  return copyText(cellText(selectedCell.value.value), "单元格已复制");
+}
+
+function copySelectedRow() {
+  if (!selectedCell.value || !response.value) return;
+  const row = response.value.result.rows[selectedCell.value.pageRowIndex] ?? [];
+  return copyText(row.map((value) => cellText(value).replace(/\r?\n/g, " ")).join("\t"), "当前行已复制");
+}
+
+function adjustColumn(index: number, delta: number) {
+  const current = columnWidths.value[index] ?? 160;
+  columnWidths.value = { ...columnWidths.value, [index]: Math.min(480, Math.max(88, current + delta)) };
+}
+
+function autoFitColumns() {
+  if (!response.value) return;
+  columnWidths.value = Object.fromEntries(
+    response.value.result.columns.map((column, index) => {
+      const widest = Math.max(column.length, ...response.value!.result.rows.map((row) => displayValue(row[index]).length));
+      return [index, Math.min(360, Math.max(88, widest * 7 + 28))];
+    }),
+  );
+}
+
+async function sharePage() {
+  if (!response.value || exporting.value) return;
+  exporting.value = true;
+  interactionStatus.value = "";
+  error.value = "";
+  try {
+    const receipt = await exportQueryResult(
+      {
+        result: response.value.result,
+        database: props.target.database,
+        schema: props.target.schema,
+      },
+      exportFormat.value,
+    );
+    interactionStatus.value = receipt.delivery === "share" ? `已打开分享面板 · ${receipt.filename}` : `${receipt.format.toUpperCase()} 已下载 · ${receipt.filename}`;
+  } catch (reason) {
+    error.value = reason instanceof Error ? `导出失败：${reason.message}` : "导出失败，请重试";
+  } finally {
+    exporting.value = false;
+  }
+}
+
+onMounted(() => loadPage(0));
+onBeforeUnmount(() => {
+  requestId++;
+  controller?.abort();
+});
+</script>
+
+<template>
+  <section class="table-data">
+    <header class="data-toolbar">
+      <button class="back" type="button" aria-label="返回表列表" @click="emit('back')">←</button>
+      <div>
+        <span>READ-ONLY DATA FEED</span>
+        <strong>{{ target.table }}</strong>
+        <p>
+          {{ target.database }}<template v-if="target.schema"> / {{ target.schema }}</template>
+        </p>
+      </div>
+      <button class="sql-action" :disabled="!response" type="button" @click="openQuery">SQL ↗</button>
+    </header>
+
+    <div class="data-controls">
+      <form class="filter-builder" @submit.prevent="applyFilter">
+        <select v-model="filterColumn" aria-label="筛选字段" :disabled="!response">
+          <option value="">筛选字段</option>
+          <option v-for="column in response?.result.columns ?? []" :key="column" :value="column">{{ column }}</option>
+        </select>
+        <select v-model="filterOperator" aria-label="筛选方式">
+          <option v-for="operator in filterOperators" :key="operator.value" :value="operator.value">
+            {{ operator.label }}
+          </option>
+        </select>
+        <input v-if="filterNeedsValue" v-model="filterValue" aria-label="筛选值" maxlength="512" placeholder="输入筛选值" />
+        <span v-else class="no-value">无需值</span>
+        <button :disabled="!filterColumn || (filterNeedsValue && !filterValue) || loading" type="submit">应用</button>
+      </form>
+      <div v-if="filters.length" class="filter-chips" aria-label="已应用筛选">
+        <button v-for="(filter, index) in filters" :key="`${filter.column}-${index}`" type="button" @click="removeFilter(index)">{{ filterSummary(filter) }} ×</button>
+      </div>
+    </div>
+
+    <div v-if="loading" class="data-state">
+      <i aria-hidden="true"></i><strong>正在读取表数据</strong>
+      <p>服务端只读校验 · 每页 {{ pageSize }} 行</p>
+    </div>
+    <div v-else-if="error" class="data-state error">
+      <b>!</b><strong>读取失败</strong>
+      <p>{{ error }}</p>
+      <button type="button" @click="loadPage(response?.offset ?? 0)">重试</button>
+    </div>
+    <template v-else-if="response">
+      <div class="data-meta">
+        <span>OFFSET {{ response.offset }}</span>
+        <span>{{ response.result.rows.length }} ROWS</span>
+        <span>{{ response.result.execution_time_ms }} MS</span>
+      </div>
+      <div class="result-tools">
+        <button type="button" @click="autoFitColumns">AUTO WIDTH</button>
+        <select v-model="exportFormat" aria-label="表数据导出格式">
+          <option value="csv">CSV</option>
+          <option value="json">JSON</option>
+          <option value="markdown">MARKDOWN</option>
+          <option value="xlsx">EXCEL XLSX</option>
+        </select>
+        <button class="export-action" :disabled="exporting" type="button" @click="sharePage">
+          {{ exporting ? "PREPARING…" : "EXPORT ↗" }}
+        </button>
+      </div>
+      <p v-if="interactionStatus" class="interaction-status" aria-live="polite">{{ interactionStatus }}</p>
+      <p class="data-hint">点击单元格查看完整内容并复制；表头 − / + 可调整列宽。导出范围为当前服务端页。</p>
+      <div class="data-scroll">
+        <table>
+          <colgroup>
+            <col v-for="(_, index) in response.result.columns" :key="index" :style="{ width: `${columnWidths[index] ?? 160}px` }" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th v-for="(column, columnIndex) in response.result.columns" :key="column">
+                <div class="column-heading">
+                  <button class="sort-action" type="button" :aria-label="`按 ${column} 排序`" :class="{ active: sort?.column === column }" @click="cycleSort(column)">
+                    {{ column }} <b>{{ sortIndicator(column) }}</b>
+                  </button>
+                  <span class="width-controls">
+                    <button type="button" :aria-label="`缩小 ${column} 列`" @click="adjustColumn(columnIndex, -32)">−</button>
+                    <button type="button" :aria-label="`加宽 ${column} 列`" @click="adjustColumn(columnIndex, 32)">＋</button>
+                  </span>
+                </div>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, rowIndex) in response.result.rows" :key="response.offset + rowIndex">
+              <td v-for="(value, columnIndex) in row" :key="columnIndex" :class="{ null: value === null }" :title="displayValue(value)" tabindex="0" role="button" @click="openCell(rowIndex, columnIndex, value)" @keydown.enter.prevent="openCell(rowIndex, columnIndex, value)">
+                {{ displayValue(value) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-if="response.result.rows.length === 0" class="empty-data">这一页没有数据。</div>
+      </div>
+      <footer>
+        <button :disabled="response.offset === 0 || loading" type="button" @click="loadPage(Math.max(0, response.offset - response.limit))">← 上一页</button>
+        <label>
+          <span>第 {{ Math.floor(response.offset / response.limit) + 1 }} 页</span>
+          <select v-model.number="pageSize" aria-label="每页行数" :disabled="loading" @change="loadPage(0)">
+            <option :value="20">20 行</option>
+            <option :value="30">30 行</option>
+            <option :value="50">50 行</option>
+          </select>
+        </label>
+        <button :disabled="!response.hasMore || loading" type="button" @click="loadPage(response.offset + response.limit)">下一页 →</button>
+      </footer>
+      <p class="ordering-note">点击字段名切换升序、降序和默认顺序；存在主键时会追加主键以稳定翻页。</p>
+    </template>
+
+    <div v-if="selectedCell && response" class="cell-sheet-backdrop" @click.self="selectedCell = null">
+      <section class="cell-sheet" role="dialog" aria-modal="true" aria-label="完整单元格内容">
+        <header>
+          <div>
+            <span>ROW {{ selectedCell.rowIndex + 1 }} / COLUMN {{ selectedCell.columnIndex + 1 }}</span>
+            <strong>{{ response.result.columns[selectedCell.columnIndex] }}</strong>
+          </div>
+          <button type="button" aria-label="关闭单元格详情" @click="selectedCell = null">×</button>
+        </header>
+        <pre>{{ cellText(selectedCell.value) }}</pre>
+        <footer>
+          <button type="button" @click="copySelectedRow">复制整行</button>
+          <button type="button" @click="copySelectedCell">复制单元格</button>
+        </footer>
+      </section>
+    </div>
+  </section>
+</template>
+
+<style scoped>
+.table-data {
+  display: grid;
+  gap: 10px;
+}
+.data-toolbar {
+  display: grid;
+  min-height: 68px;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--acid);
+  background: var(--panel);
+}
+.data-toolbar button {
+  border: 0;
+  background: transparent;
+  color: var(--acid);
+  font: inherit;
+}
+.data-toolbar .back {
+  border-right: 1px solid var(--line);
+  font-size: 16px;
+}
+.data-toolbar .sql-action {
+  border-left: 1px solid var(--line);
+  padding: 0 12px;
+  font-size: 8px;
+  font-weight: 760;
+  letter-spacing: 0.1em;
+}
+.data-toolbar > div {
+  min-width: 0;
+  padding: 10px 12px;
+}
+.data-toolbar span {
+  color: var(--acid);
+  font-size: 7px;
+  letter-spacing: 0.14em;
+}
+.data-toolbar strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.data-toolbar p {
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.data-controls {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 8px;
+}
+.filter-builder {
+  display: grid;
+  grid-template-columns: minmax(82px, 1fr) minmax(76px, 0.8fr) minmax(100px, 1.2fr) auto;
+  gap: 6px;
+}
+.filter-builder select,
+.filter-builder input,
+footer select {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: #0b0d0c;
+  padding: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 8px;
+}
+.filter-builder button {
+  border: 1px solid var(--acid);
+  background: transparent;
+  padding: 0 10px;
+  color: var(--acid);
+  font: inherit;
+  font-size: 8px;
+}
+.filter-builder .no-value {
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  color: var(--faint);
+  font-size: 8px;
+}
+.filter-chips {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+}
+.filter-chips button {
+  flex: none;
+  border: 1px solid rgba(255, 187, 61, 0.4);
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--amber);
+  font: inherit;
+  font-size: 7px;
+}
+.data-state {
+  min-height: 210px;
+  border: 1px dashed rgba(235, 242, 232, 0.16);
+  padding: 34px 22px;
+}
+.data-state i {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--line);
+  border-top-color: var(--acid);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.data-state b {
+  color: var(--danger);
+  font-size: 28px;
+}
+.data-state strong {
+  display: block;
+  margin-top: 18px;
+  font-size: 14px;
+}
+.data-state p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-family: "PingFang SC", sans-serif;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.data-state button {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  background: transparent;
+  padding: 9px 12px;
+  color: var(--acid);
+}
+.data-meta {
+  display: flex;
+  gap: 14px;
+  border: 1px solid var(--line);
+  padding: 9px 11px;
+  color: var(--acid);
+  font-size: 7px;
+  letter-spacing: 0.1em;
+}
+.result-tools {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.result-tools button,
+.result-tools select {
+  min-height: 40px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 9px;
+  color: var(--acid);
+  font: inherit;
+  font-size: 7px;
+}
+.result-tools select {
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+.result-tools button:first-child {
+  color: var(--muted);
+}
+.result-tools .export-action {
+  background: linear-gradient(135deg, rgba(199, 255, 61, 0.16), rgba(199, 255, 61, 0.04));
+  font-weight: 720;
+}
+.interaction-status,
+.data-hint {
+  margin: 0;
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 7px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.data-hint {
+  color: var(--faint);
+}
+.data-scroll {
+  max-height: 54vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: #0b0d0c;
+}
+table {
+  table-layout: fixed;
+  min-width: 100%;
+  width: max-content;
+  border-collapse: collapse;
+  white-space: nowrap;
+  font-size: 9px;
+}
+th,
+td {
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #171b18;
+  color: var(--acid);
+}
+.column-heading {
+  display: flex;
+  min-height: 40px;
+  align-items: stretch;
+  justify-content: space-between;
+}
+.sort-action {
+  overflow: hidden;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 10px;
+  color: var(--acid);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sort-action b {
+  color: var(--faint);
+  font-weight: 400;
+}
+.sort-action.active b {
+  color: var(--amber);
+}
+.width-controls {
+  display: flex;
+}
+.width-controls button {
+  width: 27px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+  font: inherit;
+}
+td {
+  max-width: 480px;
+  padding: 10px;
+  cursor: pointer;
+}
+td:active,
+td:focus {
+  outline: 0;
+  background: rgba(199, 255, 61, 0.1);
+  color: var(--acid);
+}
+td.null {
+  color: var(--faint);
+  font-style: italic;
+}
+.empty-data {
+  padding: 30px 14px;
+  color: var(--muted);
+  font-size: 9px;
+  text-align: center;
+}
+footer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  border: 1px solid var(--line);
+}
+footer button {
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--acid);
+  font: inherit;
+  font-size: 8px;
+}
+footer button:first-child {
+  border-right: 1px solid var(--line);
+}
+footer button:last-child {
+  border-left: 1px solid var(--line);
+}
+footer label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+}
+footer span {
+  color: var(--muted);
+  font-size: 8px;
+  white-space: nowrap;
+}
+footer select {
+  padding: 5px;
+}
+button:disabled {
+  opacity: 0.4;
+}
+.ordering-note {
+  margin: 0;
+  color: var(--faint);
+  font-family: "PingFang SC", sans-serif;
+  font-size: 8px;
+  line-height: 1.55;
+}
+.cell-sheet-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  align-items: end;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+}
+.cell-sheet {
+  max-height: min(72vh, 560px);
+  overflow: hidden;
+  border: 1px solid rgba(199, 255, 61, 0.45);
+  border-bottom: 0;
+  background: #0b0e0c;
+  box-shadow: 0 -24px 70px rgba(0, 0, 0, 0.68);
+}
+.cell-sheet > header {
+  display: flex;
+  min-height: 58px;
+  align-items: stretch;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-left: 14px;
+}
+.cell-sheet > header div {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 5px;
+}
+.cell-sheet > header span {
+  color: var(--muted);
+  font-size: 7px;
+  letter-spacing: 0.14em;
+}
+.cell-sheet > header strong {
+  overflow: hidden;
+  color: var(--acid);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-sheet > header button {
+  width: 58px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 24px;
+}
+.cell-sheet pre {
+  overflow: auto;
+  max-height: calc(min(72vh, 560px) - 116px);
+  min-height: 120px;
+  margin: 0;
+  padding: 16px;
+  color: var(--ink);
+  font:
+    11px/1.65 "Azeret Mono Variable",
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cell-sheet > footer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.cell-sheet > footer button {
+  min-height: 48px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: rgba(199, 255, 61, 0.07);
+  color: var(--acid);
+  font: inherit;
+  font-size: 9px;
+}
+@media (max-width: 560px) {
+  .filter-builder {
+    grid-template-columns: 1fr 1fr auto;
+  }
+  .filter-builder input,
+  .filter-builder .no-value {
+    grid-column: 1 / 3;
+  }
+  .filter-builder button {
+    grid-column: 3;
+    grid-row: 1 / 3;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+</style>

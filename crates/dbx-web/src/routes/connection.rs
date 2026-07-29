@@ -69,7 +69,7 @@ fn is_connection_info_capability_unsupported(error: &str) -> bool {
         && (error.contains("unsupported") || error.contains("unknown method") || error.contains("method not found"))
 }
 
-async fn run_temporary_connection_test(
+pub(crate) async fn run_temporary_connection_test(
     app: &Arc<AppState>,
     config: ConnectionConfig,
     include_database_info: bool,

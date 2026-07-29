@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::Json;
-use dbx_core::saved_sql::{SavedSqlFile, SavedSqlFolder, SavedSqlLibrary};
+use dbx_core::saved_sql::{SavedSqlFile, SavedSqlFolder, SavedSqlLibrary, SavedSqlSearchRequest, SavedSqlSearchResult};
 
 use crate::error::AppError;
 use crate::state::WebState;
@@ -18,6 +18,14 @@ pub async fn load_saved_sql_file(
 ) -> Result<Json<Option<SavedSqlFile>>, AppError> {
     let file = state.app.storage.load_saved_sql_file(&id).await.map_err(AppError::from)?;
     Ok(Json(file))
+}
+
+pub async fn search_saved_sql_files(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<SavedSqlSearchRequest>,
+) -> Result<Json<SavedSqlSearchResult>, AppError> {
+    let result = state.app.storage.search_saved_sql_files(request).await.map_err(AppError::from)?;
+    Ok(Json(result))
 }
 
 pub async fn save_saved_sql_folder(

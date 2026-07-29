@@ -44,3 +44,38 @@ pub struct SavedSqlLibrary {
     pub folders: Vec<SavedSqlFolder>,
     pub files: Vec<SavedSqlFile>,
 }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SavedSqlSort {
+    #[default]
+    UpdatedDesc,
+    UpdatedAsc,
+    NameAsc,
+    NameDesc,
+    CreatedDesc,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSqlSearchRequest {
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub connection_ids: Vec<String>,
+    #[serde(default)]
+    pub sort: SavedSqlSort,
+    #[serde(default)]
+    pub page: u32,
+    #[serde(default)]
+    pub page_size: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSqlSearchResult {
+    pub files: Vec<SavedSqlFile>,
+    pub total: u64,
+    pub page: u32,
+    pub page_size: u32,
+}
