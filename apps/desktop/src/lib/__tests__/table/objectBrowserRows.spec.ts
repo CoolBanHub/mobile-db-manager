@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { orderItemsByPinnedTreeNodeOrder, removePinnedTreeNodesFromOrder, treeNodePinIdentity, treeNodePinKey } from "@/lib/app/pinnedItems";
-import { buildObjectBrowserRows, canonicalizeObjectBrowserPinnedTreeNodeIdentity, objectBrowserRowLegacyPinnedTreeNodeIds, objectBrowserRowMatchesPinnedTreeNode, sortObjectBrowserRows, type ObjectBrowserRow } from "@/lib/table/objectBrowserRows";
+import { buildObjectBrowserRows, canonicalizeObjectBrowserPinnedTreeNodeIdentity, filterObjectBrowserRows, objectBrowserRowLegacyPinnedTreeNodeIds, objectBrowserRowMatchesPinnedTreeNode, sortObjectBrowserRows, type ObjectBrowserRow } from "@/lib/table/objectBrowserRows";
 import type { TreeNode } from "@/types/database";
 
 describe("buildObjectBrowserRows", () => {
@@ -24,6 +24,21 @@ describe("buildObjectBrowserRows", () => {
     });
 
     expect(rows[0]?.schema).toBeUndefined();
+  });
+});
+
+describe("filterObjectBrowserRows", () => {
+  const rows: ObjectBrowserRow[] = [
+    { id: "public-orders", name: "orders", displayName: "orders", schema: "public", type: "TABLE" },
+    { id: "audit-events", name: "events", displayName: "events", schema: "audit", type: "TABLE" },
+  ];
+
+  it("matches schema names during database-wide metadata search", () => {
+    expect(filterObjectBrowserRows(rows, "audit").map((row) => row.id)).toEqual(["audit-events"]);
+  });
+
+  it("matches schema names with regular-expression search", () => {
+    expect(filterObjectBrowserRows(rows, "/^pub/").map((row) => row.id)).toEqual(["public-orders"]);
   });
 });
 

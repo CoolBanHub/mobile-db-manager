@@ -231,9 +231,9 @@ export function filterObjectBrowserRows(rows: ObjectBrowserRow[], query: string)
   if (!q) return rows;
   const regex = parseSlashDelimitedRegexQuery(query.trim());
   if (regex) {
-    return rows.filter((row) => [row.displayName, row.name, row.type, row.comment].filter(Boolean).some((value) => regex.test(String(value))));
+    return rows.filter((row) => [row.displayName, row.name, row.schema, row.type, row.comment].filter(Boolean).some((value) => regex.test(String(value))));
   }
-  return rows.filter((row) => [row.displayName, row.name, row.type, row.comment].filter(Boolean).some((value) => String(value).toLowerCase().includes(q)));
+  return rows.filter((row) => [row.displayName, row.name, row.schema, row.type, row.comment].filter(Boolean).some((value) => String(value).toLowerCase().includes(q)));
 }
 
 export function countObjectBrowserRowsByFilter(rows: ObjectBrowserRow[]): ObjectBrowserFilterCounts {

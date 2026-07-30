@@ -94,7 +94,7 @@ test("object browser rows normalize space separated materialized views", () => {
   );
 });
 
-test("object browser search matches names, types, and comments but not schema names", () => {
+test("object browser search matches names, schemas, types, and comments", () => {
   const rows = buildObjectBrowserRows({
     objects: [
       { name: "users", object_type: "TABLE", schema: "exam_hub", comment: "account records" },
@@ -108,7 +108,7 @@ test("object browser search matches names, types, and comments but not schema na
 
   assert.deepEqual(
     filterObjectBrowserRows(rows, "exam").map((row) => row.name),
-    ["orders", "refresh_exam_stats"],
+    ["users", "orders", "refresh_exam_stats"],
   );
 });
 

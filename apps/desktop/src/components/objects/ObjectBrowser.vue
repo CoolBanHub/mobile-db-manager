@@ -34,6 +34,7 @@ import {
   Package,
   RefreshCw,
   RotateCcw,
+  ServerCog,
   Scissors,
   Search,
   ScrollText,
@@ -53,7 +54,7 @@ import CustomContextMenu, { type ContextMenuItem } from "@/components/ui/CustomC
 import DangerConfirmDialog from "@/components/editor/DangerConfirmDialog.vue";
 import ProcedureExecutionDialog from "@/components/objects/ProcedureExecutionDialog.vue";
 import * as api from "@/lib/backend/api";
-import type { ColumnInfo, ConnectionConfig, ForeignKeyInfo, IndexInfo, ObjectBrowserViewMode, ObjectBrowserViewport, ObjectInfo, ObjectSourceKind, ObjectStatistics, TableInfoTab, TreeNode, TriggerInfo } from "@/types/database";
+import type { ColumnInfo, ConnectionConfig, ForeignKeyInfo, IndexInfo, ObjectBrowserViewMode, ObjectBrowserViewport, ObjectSourceKind, ObjectStatistics, TableInfoTab, TreeNode, TriggerInfo } from "@/types/database";
 import { sortTablesByFkDependency, type TableWithFk } from "@/lib/table/tableDependencySort";
 import { isSchemaAware } from "@/lib/database/databaseCapabilities";
 import { supportsSchemaDiagram, supportsTableImport, supportsTableStructureEditing, supportsTableTruncate } from "@/lib/database/databaseFeatureSupport";
@@ -117,6 +118,9 @@ import { filterObjectBrowserTableColumns } from "@/lib/table/objectBrowserTableI
 import { createSidePanelRequestGuard } from "@/lib/table/sidePanelRequestGuard";
 import { runBatchTableTruncate } from "@/lib/table/batchTableTruncate";
 import { tableColumnDefaultDisplayValue } from "@/lib/table/tableColumnDefaultPresentation";
+import { invalidateTableMetadataCache, loadTableMetadata, type TableMetadataLoadResult } from "@/lib/metadata/tableMetadataCache";
+import type { MetadataLoadCacheStatus } from "@/lib/metadata/metadataLoadCoordinator";
+import { MetadataTaskLimiter } from "@/lib/metadata/metadataTaskLimiter";
 
 type ObjectFilter = ObjectBrowserFilter;
 type ObjectBrowserColumnKey = "select" | "name" | "type" | "estimatedRows" | "totalBytes" | "created_at" | "updated_at" | "comment";
@@ -148,6 +152,9 @@ const refreshTooltip = computed(() => {
 
 const schemas = ref<string[]>([]);
 const selectedSchema = ref<string | undefined>(props.schema);
+const searchAllSchemas = ref(false);
+const ALL_SCHEMAS_OPTION = "__dbx_all_schemas__";
+const schemaMetadataLimiter = new MetadataTaskLimiter(3);
 const rows = ref<ObjectBrowserRow[]>([]);
 const rootRef = ref<HTMLElement>();
 const search = ref("");
@@ -179,6 +186,10 @@ const tableForeignKeys = ref<ForeignKeyInfo[]>([]);
 const tableForeignKeysLoading = ref(false);
 const tableTriggers = ref<TriggerInfo[]>([]);
 const tableTriggersLoading = ref(false);
+const tableCoreMetadataLoaded = ref(false);
+const tableMetadataCacheStatus = ref<MetadataLoadCacheStatus>("none");
+const tableMetadataCacheAgeMs = ref(0);
+const tableMetadataLoadedAt = ref<number | null>(null);
 const tableInfoSearchQuery = ref("");
 const tableInfoWrap = ref(true);
 const tableInfoDdlPreRef = ref<HTMLPreElement | null>(null);
@@ -252,6 +263,9 @@ let preserveObjectFilterScrollOnce = false;
 const { addTask: addExportTask } = useExportTracker();
 
 const needsSchema = computed(() => isSchemaAware(props.connection.db_type) && !connectionUsesDatabaseObjectTreeMode(props.connection));
+const schemaSelectOptions = computed(() => (needsSchema.value ? [ALL_SCHEMAS_OPTION, ...schemas.value] : schemas.value));
+const schemaSelectValue = computed(() => (searchAllSchemas.value ? ALL_SCHEMAS_OPTION : selectedSchema.value || ""));
+const metadataScopeLabel = computed(() => (searchAllSchemas.value ? t("objects.allSchemas") : selectedSchema.value || props.database));
 const canDropTargetCascade = computed(() => dropTarget.value?.type === "TABLE" && supportsDropTableCascade(effectiveDatabaseType.value));
 const canTruncateTargetCascade = computed(() => !!truncateTarget.value && supportsTruncateTableCascade(effectiveDatabaseType.value));
 const objectCounts = computed(() => countObjectBrowserRowsByFilter(rows.value));
@@ -863,6 +877,35 @@ const tableInfoTabListStyle = computed(() => ({
   gridTemplateColumns: `repeat(${tableInfoTabs.value.length}, minmax(0, 1fr))`,
 }));
 
+const tableMetadataStatusLabel = computed(() => {
+  if (tableColumnsLoading.value || tableIndexesLoading.value || tableForeignKeysLoading.value || tableTriggersLoading.value || tableDdlLoading.value) {
+    return t("objects.metadataLoading");
+  }
+  if (tableMetadataCacheStatus.value === "hit") {
+    return t("objects.metadataCached", { age: formatMetadataAge(tableMetadataCacheAgeMs.value) });
+  }
+  if (tableMetadataCacheStatus.value === "refresh") {
+    return t("objects.metadataRefreshed");
+  }
+  if (tableMetadataLoadedAt.value) {
+    return t("objects.metadataLive");
+  }
+  return t("objects.metadataNotLoaded");
+});
+
+const tableMetadataStatusClass = computed(() => {
+  if (tableMetadataCacheStatus.value === "hit") return "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  if (tableMetadataLoadedAt.value) return "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  return "border-border bg-muted/40 text-muted-foreground";
+});
+
+function formatMetadataAge(ageMs: number) {
+  const seconds = Math.max(0, Math.floor(ageMs / 1000));
+  if (seconds < 2) return t("objects.metadataJustNow");
+  if (seconds < 60) return t("objects.metadataSeconds", { count: seconds });
+  return t("objects.metadataMinutes", { count: Math.floor(seconds / 60) });
+}
+
 const filteredTableColumns = computed(() => filterObjectBrowserTableColumns(tableColumns.value, tableInfoSearchQuery.value));
 
 const filteredTableIndexes = computed(() => {
@@ -909,6 +952,10 @@ async function openTableInfo(row: ObjectBrowserRow, initialTab?: TableInfoTab) {
   tableIndexes.value = [];
   tableForeignKeys.value = [];
   tableTriggers.value = [];
+  tableCoreMetadataLoaded.value = false;
+  tableMetadataCacheStatus.value = "none";
+  tableMetadataCacheAgeMs.value = 0;
+  tableMetadataLoadedAt.value = null;
   tableInfoSearchQuery.value = "";
   // Determine initial tab: explicit request > first available > ddl
   const firstTab = initialTab ?? tableInfoTabs.value[0]?.id ?? "ddl";
@@ -937,6 +984,7 @@ async function fetchTableDdl() {
     const ddl = await api.getTableDisplayDdl(props.connection.id, props.database || "", schema, row.name, tableDdlObjectType(row.type), props.catalog);
     if (sidePanelGuard.isStale(epoch)) return;
     tableDdlContent.value = ddl;
+    markTableMetadataLive();
   } catch (e: any) {
     if (sidePanelGuard.isStale(epoch)) return;
     tableDdlContent.value = `-- Error: ${e?.message || e}`;
@@ -945,40 +993,63 @@ async function fetchTableDdl() {
   }
 }
 
-async function fetchTableColumns() {
+function tableMetadataRequest(row: ObjectBrowserRow, force = false) {
+  return {
+    connectionId: props.connection.id,
+    database: props.database || "",
+    schema: row.schema || selectedSchema.value || props.database,
+    tableName: row.name,
+    tableType: row.type,
+    databaseType: effectiveDatabaseType.value,
+    driverProfile: props.connection.driver_profile,
+    catalog: props.catalog,
+    force,
+  };
+}
+
+function applyTableMetadataLoad(result: TableMetadataLoadResult) {
+  tableColumns.value = result.metadata.columns;
+  tableIndexes.value = result.metadata.indexes;
+  tableCoreMetadataLoaded.value = true;
+  tableMetadataCacheStatus.value = result.cacheStatus;
+  tableMetadataCacheAgeMs.value = result.ageMs;
+  tableMetadataLoadedAt.value = Date.now();
+}
+
+function markTableMetadataLive(status: MetadataLoadCacheStatus = "miss") {
+  tableMetadataCacheStatus.value = status;
+  tableMetadataCacheAgeMs.value = 0;
+  tableMetadataLoadedAt.value = Date.now();
+}
+
+async function fetchTableCoreMetadata(force = false) {
   const row = sidePanelRow.value;
-  if (!row || tableColumns.value.length > 0) return;
+  if (!row || (tableCoreMetadataLoaded.value && !force)) return;
   const epoch = sidePanelGuard.capture();
   tableColumnsLoading.value = true;
+  tableIndexesLoading.value = true;
   try {
-    const schema = row.schema || selectedSchema.value || props.database;
-    const columns = await api.getColumns(props.connection.id, props.database || "", schema, row.name, props.catalog);
+    const result = await loadTableMetadata(tableMetadataRequest(row, force));
     if (sidePanelGuard.isStale(epoch)) return;
-    tableColumns.value = columns;
+    applyTableMetadataLoad(result);
   } catch {
     if (sidePanelGuard.isStale(epoch)) return;
     tableColumns.value = [];
+    tableIndexes.value = [];
   } finally {
-    if (sidePanelGuard.isFresh(epoch)) tableColumnsLoading.value = false;
+    if (sidePanelGuard.isFresh(epoch)) {
+      tableColumnsLoading.value = false;
+      tableIndexesLoading.value = false;
+    }
   }
 }
 
+async function fetchTableColumns() {
+  await fetchTableCoreMetadata();
+}
+
 async function fetchTableIndexes() {
-  const row = sidePanelRow.value;
-  if (!row || tableIndexes.value.length > 0) return;
-  const epoch = sidePanelGuard.capture();
-  tableIndexesLoading.value = true;
-  try {
-    const schema = row.schema || selectedSchema.value || props.database;
-    const indexes = await api.listIndexes(props.connection.id, props.database || "", schema, row.name, props.catalog);
-    if (sidePanelGuard.isStale(epoch)) return;
-    tableIndexes.value = indexes;
-  } catch {
-    if (sidePanelGuard.isStale(epoch)) return;
-    tableIndexes.value = [];
-  } finally {
-    if (sidePanelGuard.isFresh(epoch)) tableIndexesLoading.value = false;
-  }
+  await fetchTableCoreMetadata();
 }
 
 async function fetchTableForeignKeys() {
@@ -991,6 +1062,7 @@ async function fetchTableForeignKeys() {
     const fks = await api.listForeignKeys(props.connection.id, props.database || "", schema, row.name, props.catalog);
     if (sidePanelGuard.isStale(epoch)) return;
     tableForeignKeys.value = fks;
+    markTableMetadataLive();
   } catch {
     if (sidePanelGuard.isStale(epoch)) return;
     tableForeignKeys.value = [];
@@ -1009,12 +1081,39 @@ async function fetchTableTriggers() {
     const triggers = await api.listTriggers(props.connection.id, props.database || "", schema, row.name, props.catalog);
     if (sidePanelGuard.isStale(epoch)) return;
     tableTriggers.value = triggers;
+    markTableMetadataLive();
   } catch {
     if (sidePanelGuard.isStale(epoch)) return;
     tableTriggers.value = [];
   } finally {
     if (sidePanelGuard.isFresh(epoch)) tableTriggersLoading.value = false;
   }
+}
+
+async function refreshActiveTableMetadata() {
+  const row = sidePanelRow.value;
+  if (!row || sidePanelMode.value !== "table-info") return;
+  invalidateTableMetadataCache({
+    connectionId: props.connection.id,
+    database: props.database,
+    schema: row.schema || selectedSchema.value || props.database,
+    tableName: row.name,
+  });
+  if (tableInfoTab.value === "columns" || tableInfoTab.value === "indexes") {
+    await fetchTableCoreMetadata(true);
+    return;
+  }
+  if (tableInfoTab.value === "ddl") {
+    tableDdlContent.value = "";
+    await fetchTableDdl();
+  } else if (tableInfoTab.value === "foreignKeys") {
+    tableForeignKeys.value = [];
+    await fetchTableForeignKeys();
+  } else if (tableInfoTab.value === "triggers") {
+    tableTriggers.value = [];
+    await fetchTableTriggers();
+  }
+  markTableMetadataLive("refresh");
 }
 
 function copyTableDdl() {
@@ -2155,6 +2254,7 @@ async function loadSchemas() {
   if (!needsSchema.value) {
     schemas.value = [];
     selectedSchema.value = undefined;
+    searchAllSchemas.value = false;
     return;
   }
   loadingSchemas.value = true;
@@ -2176,18 +2276,39 @@ async function loadObjects() {
   rows.value = [];
   try {
     const schema = needsSchema.value ? selectedSchema.value || "" : props.database;
-    const objects: ObjectInfo[] = await api.listObjects(props.connection.id, props.database, schema, undefined, undefined, undefined, undefined, props.catalog);
+    const targetSchemas = needsSchema.value && searchAllSchemas.value ? schemas.value : [schema];
+    const metadataScope = `${props.connection.id}:${props.database}:${props.catalog || ""}`;
+    const objectGroupResults = await Promise.allSettled(
+      targetSchemas.map((targetSchema) =>
+        schemaMetadataLimiter.run(metadataScope, "object-browser-objects", async () => ({
+          schema: targetSchema,
+          objects: id === loadId ? await api.listObjects(props.connection.id, props.database, targetSchema, undefined, undefined, undefined, undefined, props.catalog) : [],
+        })),
+      ),
+    );
     if (id !== loadId) return;
-    rows.value = buildObjectBrowserRows({
-      objects,
-      database: props.database,
-      fallbackSchema: schema,
-      rowSchema: connectionObjectTreeNodeSchema(props.connection, props.database, selectedSchema.value),
-    });
+    const objectGroups = objectGroupResults.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+    const failedSchemaCount = objectGroupResults.length - objectGroups.length;
+    if (failedSchemaCount && objectGroups.length === 0) {
+      throw objectGroupResults.find((result) => result.status === "rejected")?.reason;
+    }
+    if (failedSchemaCount) {
+      toast(t("objects.partialSchemaLoadFailed", { count: failedSchemaCount }), 5000);
+    }
+    rows.value = objectGroups.flatMap(({ schema: targetSchema, objects }) =>
+      buildObjectBrowserRows({
+        objects,
+        database: props.database,
+        fallbackSchema: targetSchema,
+        rowSchema: connectionObjectTreeNodeSchema(props.connection, props.database, targetSchema),
+      }),
+    );
     const availableTableIds = new Set(rows.value.filter((row) => row.type === "TABLE").map((row) => row.id));
     setSelectedTableIds(new Set([...selectedTableIds.value].filter((id) => availableTableIds.has(id))));
     expandedPartitionParentIds.value = new Set([...expandedPartitionParentIds.value].filter((id) => rows.value.some((row) => row.id === id && row.partitionCount)));
-    void loadObjectStatistics(id, schema);
+    for (const targetSchema of targetSchemas) {
+      void loadObjectStatistics(id, targetSchema);
+    }
   } catch (e: any) {
     if (id !== loadId) return;
     error.value = e?.message || String(e);
@@ -2208,7 +2329,7 @@ async function loadObjects() {
 async function loadObjectStatistics(id: number, schema: string) {
   if (!rows.value.some((row) => row.type === "TABLE")) return;
   try {
-    const stats = await api.listObjectStatistics(props.connection.id, props.database, schema);
+    const stats = await schemaMetadataLimiter.run(`${props.connection.id}:${props.database}:${props.catalog || ""}`, "object-browser-statistics", () => api.listObjectStatistics(props.connection.id, props.database, schema));
     if (id !== loadId || stats.length === 0) return;
     mergeObjectStatistics(stats, schema);
   } catch (e) {
@@ -2249,8 +2370,9 @@ function refresh(): boolean {
 }
 
 function onSchemaChange(value: any) {
-  selectedSchema.value = typeof value === "string" && value ? value : undefined;
-  emit("schemaChange", selectedSchema.value);
+  searchAllSchemas.value = value === ALL_SCHEMAS_OPTION;
+  selectedSchema.value = searchAllSchemas.value ? selectedSchema.value || schemas.value[0] : typeof value === "string" && value ? value : undefined;
+  emit("schemaChange", searchAllSchemas.value ? undefined : selectedSchema.value);
   userHasSelectedFilter.value = false;
   objectFilter.value = "all";
   void loadObjects();
@@ -2312,6 +2434,7 @@ watch(
   [() => props.connection.id, () => props.database, () => props.schema],
   async () => {
     selectedSchema.value = props.schema;
+    searchAllSchemas.value = false;
     userHasSelectedFilter.value = false;
     objectFilter.value = "all";
     clearTableSelection();
@@ -2473,10 +2596,10 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
   <div ref="rootRef" data-object-browser-root class="flex h-full min-h-0 min-w-0 flex-col bg-background outline-none" tabindex="0" @keydown="onObjectBrowserKeydown">
     <div class="flex h-10 shrink-0 items-center gap-2 border-b px-3">
       <div class="flex min-w-0 items-center gap-2">
-        <span class="inline-flex max-w-[14rem] min-w-0 items-center rounded border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium truncate" :title="selectedSchema || props.database">
-          {{ selectedSchema || props.database }}
+        <span class="inline-flex max-w-[14rem] min-w-0 items-center rounded border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium truncate" :title="metadataScopeLabel">
+          {{ metadataScopeLabel }}
         </span>
-        <span v-if="selectedSchema" class="inline-flex max-w-[14rem] min-w-0 items-center rounded border border-border bg-muted/30 px-2 py-0.5 text-xs text-muted-foreground truncate" :title="props.database">
+        <span v-if="selectedSchema || searchAllSchemas" class="inline-flex max-w-[14rem] min-w-0 items-center rounded border border-border bg-muted/30 px-2 py-0.5 text-xs text-muted-foreground truncate" :title="props.database">
           {{ props.database }}
         </span>
       </div>
@@ -2503,8 +2626,9 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
       </div>
       <SearchableSelect
         v-if="needsSchema"
-        :model-value="selectedSchema || ''"
-        :options="schemas"
+        :model-value="schemaSelectValue"
+        :options="schemaSelectOptions"
+        :display-name="(option: string) => (option === ALL_SCHEMAS_OPTION ? t('objects.allSchemas') : option)"
         :placeholder="t('objects.schema')"
         :search-placeholder="t('editor.searchSchema')"
         :empty-text="t('grid.noSearchResults')"
@@ -2722,6 +2846,9 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                     <span v-else-if="item.partitionParentId" class="ml-4 h-5 w-5 shrink-0" />
                     <component :is="iconFor(item)" class="h-3.5 w-3.5 shrink-0" :class="iconClass(item.type)" />
                     <span class="truncate text-[13px] font-medium text-foreground" :title="item.displayName">{{ item.displayName }}</span>
+                    <span v-if="searchAllSchemas && item.schema" class="max-w-32 shrink-0 truncate rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground" :title="item.schema">
+                      {{ item.schema }}
+                    </span>
                     <span v-if="item.partitionCount" class="shrink-0 rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
                       {{ t("objects.partitions", { count: item.partitionCount }) }}
                     </span>
@@ -2771,6 +2898,7 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                       <component :is="iconFor(item)" class="h-6 w-6" :class="iconClass(item.type)" />
                     </div>
                     <span class="w-full truncate text-sm font-medium leading-tight text-foreground">{{ item.displayName }}</span>
+                    <span v-if="searchAllSchemas && item.schema" class="max-w-full truncate rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">{{ item.schema }}</span>
                     <div class="flex items-center gap-1.5">
                       <span class="text-xs text-muted-foreground">{{ typeLabel(item.type) }}</span>
                       <span v-if="item.estimatedRows != null && item.estimatedRows > 0" class="object-browser-stat-badge object-browser-stat-badge-rows rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-primary">{{
@@ -2802,6 +2930,21 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
           <div class="flex items-center gap-2 px-3 py-1.5 border-b shrink-0 bg-muted/20 h-9">
             <TableProperties class="w-3.5 h-3.5 text-muted-foreground" />
             <span class="text-xs font-medium flex-1 min-w-0 truncate">{{ sidePanelRow?.name }}</span>
+            <span class="hidden max-w-32 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:inline-flex" :class="tableMetadataStatusClass" :title="tableMetadataStatusLabel">
+              <ServerCog class="h-3 w-3 shrink-0" />
+              <span class="truncate">{{ tableMetadataStatusLabel }}</span>
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-6 w-6"
+              :title="t('objects.refreshMetadata')"
+              :aria-label="t('objects.refreshMetadata')"
+              :disabled="tableColumnsLoading || tableIndexesLoading || tableForeignKeysLoading || tableTriggersLoading || tableDdlLoading"
+              @click="refreshActiveTableMetadata"
+            >
+              <RefreshCw class="h-3 w-3" :class="{ 'animate-spin': tableColumnsLoading || tableIndexesLoading || tableForeignKeysLoading || tableTriggersLoading || tableDdlLoading }" />
+            </Button>
             <div v-if="tableInfoTab === 'ddl'" class="table-info-actions flex min-w-0 shrink-0 items-center gap-1">
               <Button variant="ghost" size="sm" class="table-info-action-button h-6 px-2 text-xs" :title="t('grid.copyDdl')" :aria-label="t('grid.copyDdl')" @click="copyTableDdl">
                 <Copy class="w-3 h-3" />
@@ -2902,6 +3045,14 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                     <div class="mt-2 font-mono text-[11px] text-muted-foreground break-all">
                       {{ index.columns.join(", ") }}
                     </div>
+                    <div v-if="index.included_columns?.length" class="mt-1 text-[11px] text-muted-foreground">
+                      <span class="font-medium text-foreground/80">{{ t("objects.includedColumns") }}:</span>
+                      <span class="ml-1 font-mono">{{ index.included_columns.join(", ") }}</span>
+                    </div>
+                    <div v-if="index.filter" class="mt-1 break-all rounded bg-muted/50 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+                      {{ index.filter }}
+                    </div>
+                    <div v-if="index.comment" class="mt-1 text-[11px] text-muted-foreground">{{ index.comment }}</div>
                   </div>
                 </div>
               </div>
@@ -2920,7 +3071,11 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
             <div v-else class="divide-y">
               <div v-for="fk in filteredTableForeignKeys" :key="`${fk.name}:${fk.column}`" class="p-3 text-xs">
                 <div class="font-medium truncate">{{ fk.name }}</div>
-                <div class="mt-1 font-mono text-[11px] text-muted-foreground break-all">{{ fk.column }} -> {{ fk.ref_table }}.{{ fk.ref_column }}</div>
+                <div class="mt-1 font-mono text-[11px] text-muted-foreground break-all">{{ fk.column }} -> {{ fk.ref_schema ? `${fk.ref_schema}.` : "" }}{{ fk.ref_table }}.{{ fk.ref_column }}</div>
+                <div v-if="fk.on_update || fk.on_delete" class="mt-2 flex flex-wrap gap-1">
+                  <span v-if="fk.on_update" class="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-700 dark:text-sky-300">ON UPDATE {{ fk.on_update }}</span>
+                  <span v-if="fk.on_delete" class="rounded bg-rose-500/10 px-1.5 py-0.5 text-[10px] text-rose-700 dark:text-rose-300">ON DELETE {{ fk.on_delete }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -2937,7 +3092,11 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
             <div v-else class="divide-y">
               <div v-for="trigger in filteredTableTriggers" :key="trigger.name" class="p-3 text-xs">
                 <div class="font-medium truncate">{{ trigger.name }}</div>
-                <div class="mt-1 text-[11px] text-muted-foreground">{{ trigger.timing }} {{ trigger.event }}</div>
+                <div class="mt-1 flex flex-wrap gap-1">
+                  <span class="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">{{ trigger.timing }}</span>
+                  <span class="rounded bg-rose-500/10 px-1.5 py-0.5 text-[10px] text-rose-700 dark:text-rose-300">{{ trigger.event }}</span>
+                </div>
+                <pre v-if="trigger.statement" class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono text-[11px] leading-4 text-muted-foreground">{{ trigger.statement }}</pre>
               </div>
             </div>
           </div>

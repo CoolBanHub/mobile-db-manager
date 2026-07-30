@@ -1058,6 +1058,23 @@ export interface SavedSqlLibrary {
   files: SavedSqlFile[];
 }
 
+export type SavedSqlSort = "updatedDesc" | "updatedAsc" | "nameAsc" | "nameDesc" | "createdDesc";
+
+export interface SavedSqlSearchRequest {
+  query?: string;
+  connectionIds?: string[];
+  sort?: SavedSqlSort;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface SavedSqlSearchResult {
+  files: SavedSqlFile[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export interface VectorCollectionMeta {
   dimension?: number;
   collectionId?: string;

@@ -41,6 +41,8 @@ import type {
   SavedSqlFile,
   SavedSqlFolder,
   SavedSqlLibrary,
+  SavedSqlSearchRequest,
+  SavedSqlSearchResult,
   SshConfigHostEntry,
   TunnelProfile,
 } from "@/types/database";
@@ -1460,6 +1462,10 @@ export async function loadSavedSqlLibrary(): Promise<SavedSqlLibrary> {
 
 export async function loadSavedSqlFile(id: string): Promise<SavedSqlFile | null> {
   return invoke("load_saved_sql_file", { id });
+}
+
+export async function searchSavedSqlFiles(request: SavedSqlSearchRequest): Promise<SavedSqlSearchResult> {
+  return invoke("search_saved_sql_files", { request });
 }
 
 export async function saveSavedSqlFolder(folder: SavedSqlFolder): Promise<SavedSqlFolder> {

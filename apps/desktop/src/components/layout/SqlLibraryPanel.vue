@@ -17,7 +17,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { focusSidebarRenameInput } from "@/lib/sidebar/sidebarRenameFocus";
 import { savedSqlFolderBranchFileCount } from "@/lib/savedSql/savedSqlFolderCounts";
 import { ensureSqlExtension, stripSqlExtension } from "@/lib/savedSql/savedSqlFileName";
-import type { SavedSqlFile, SavedSqlFolder } from "@/types/database";
+import type { SavedSqlFile, SavedSqlFolder, SavedSqlSort } from "@/types/database";
 
 const { t } = useI18n();
 const { toast } = useToast();
@@ -43,6 +43,82 @@ const orphanedIds = computed(() => savedSqlStore.orphanedFileIds(activeConnectio
 
 // Sort mode: "folder" (default tree structure) or "date" (flat list by update date)
 const sortMode = ref<"folder" | "date">("folder");
+const serverSort = ref<SavedSqlSort>("updatedDesc");
+const searchPage = ref(1);
+const searchPageSize = 50;
+const searchTotal = ref(0);
+const searchFiles = ref<SavedSqlFile[]>([]);
+const searchLoading = ref(false);
+const usesServerList = computed(() => sortMode.value === "date" || Boolean(searchQuery.value));
+const searchTotalPages = computed(() => Math.max(1, Math.ceil(searchTotal.value / searchPageSize)));
+let searchTimer: number | undefined;
+let searchRequestSequence = 0;
+
+async function loadSearchPage() {
+  const sequence = ++searchRequestSequence;
+  if (!usesServerList.value) {
+    searchFiles.value = [];
+    searchTotal.value = 0;
+    searchLoading.value = false;
+    return;
+  }
+  const connectionIds = connectionStore.connections.map((connection) => connection.id);
+  if (connectionIds.length === 0) {
+    searchFiles.value = [];
+    searchTotal.value = 0;
+    searchLoading.value = false;
+    return;
+  }
+  searchLoading.value = true;
+  try {
+    const result = await api.searchSavedSqlFiles({
+      query: searchText.value.trim(),
+      connectionIds,
+      sort: serverSort.value,
+      page: searchPage.value,
+      pageSize: searchPageSize,
+    });
+    if (sequence !== searchRequestSequence) return;
+    searchFiles.value = result.files;
+    searchTotal.value = result.total;
+    if (result.page > searchTotalPages.value) {
+      searchPage.value = searchTotalPages.value;
+    }
+  } catch (error: any) {
+    if (sequence !== searchRequestSequence) return;
+    searchFiles.value = [];
+    searchTotal.value = 0;
+    toast(t("sqlLibrary.searchFailed", { message: error?.message || String(error) }), 5000);
+  } finally {
+    if (sequence === searchRequestSequence) searchLoading.value = false;
+  }
+}
+
+function scheduleSearch(resetPage = true) {
+  window.clearTimeout(searchTimer);
+  if (resetPage) searchPage.value = 1;
+  if (!usesServerList.value) {
+    void loadSearchPage();
+    return;
+  }
+  searchTimer = window.setTimeout(() => void loadSearchPage(), 250);
+}
+
+watch(
+  () => [searchText.value, sortMode.value, serverSort.value, connectionStore.connections.map((connection) => connection.id).join("\u0000")],
+  () => scheduleSearch(true),
+  { immediate: true },
+);
+
+watch(searchPage, () => {
+  window.clearTimeout(searchTimer);
+  void loadSearchPage();
+});
+
+watch(
+  () => savedSqlStore.version,
+  () => scheduleSearch(false),
+);
 
 function isConnectionVisible(connectionId: string) {
   return activeConnectionIds.value.has(connectionId);
@@ -390,19 +466,13 @@ const visibleFiles = computed(() =>
     .filter((file) => fileMatchesQuery(file)),
 );
 
-// Flat list sorted by updatedAt (descending) - combines all folders and files
+// Server-backed flat list. SQL text is searched in SQLite without loading it
+// into the browser; only the requested metadata page is returned.
 const itemsByDate = computed(() => {
-  const allFolders = savedSqlStore.allFolders
-    .filter((folder) => isConnectionVisible(folder.connectionId))
-    .filter((folder) => folderBranchMatchesQuery(folder))
-    .map((folder) => ({ type: "folder" as const, item: folder, updatedAt: folder.updatedAt }));
-
-  const allFiles = [...savedSqlStore.allFolders.flatMap((folder) => filesInFolder(folder.id)), ...visibleFiles.value].map((file) => ({ type: "file" as const, item: file, updatedAt: file.updatedAt }));
-
-  return [...allFolders, ...allFiles].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return searchFiles.value.map((file) => ({ type: "file" as const, item: file, updatedAt: file.updatedAt }));
 });
 
-const hasAnyVisibleItem = computed(() => visibleFolderRows.value.length > 0 || visibleFiles.value.length > 0);
+const hasAnyVisibleItem = computed(() => (usesServerList.value ? itemsByDate.value.length > 0 : visibleFolderRows.value.length > 0 || visibleFiles.value.length > 0));
 
 const collapsedFolders = ref<Set<string>>(new Set());
 
@@ -483,7 +553,7 @@ watch(
 
 // Unified item list for selection, matching the currently rendered order.
 const allSelectableItems = computed(() => {
-  if (sortMode.value === "date") {
+  if (usesServerList.value) {
     return itemsByDate.value.map((item) => ({
       type: item.type,
       id: item.item.id,
@@ -1076,6 +1146,8 @@ onBeforeUnmount(() => {
   document.removeEventListener("mousemove", onDocumentMouseMove, true);
   document.removeEventListener("mouseup", onDocumentMouseUp, true);
   window.clearTimeout(clearSuppressTimer);
+  window.clearTimeout(searchTimer);
+  searchRequestSequence++;
   resetDragState();
 });
 
@@ -1176,14 +1248,21 @@ function showDropInside(targetId: string) {
       </LightTooltip>
     </div>
 
-    <div class="border-b shrink-0 px-2 py-1">
-      <div class="relative">
+    <div class="border-b shrink-0 flex items-center gap-1 px-2 py-1">
+      <div class="relative min-w-0 flex-1">
         <Search class="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
         <input v-model="searchText" autocapitalize="off" autocorrect="off" spellcheck="false" class="w-full h-6 pl-7 pr-6 text-[13px] rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring" :placeholder="t('grid.search')" />
         <button v-if="searchText" type="button" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" @click="searchText = ''">
           <X class="h-3 w-3" />
         </button>
       </div>
+      <select v-if="usesServerList" v-model="serverSort" class="h-6 max-w-[112px] rounded border border-border bg-background px-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-ring" :aria-label="t('sqlLibrary.sort')">
+        <option value="updatedDesc">{{ t("sqlLibrary.updatedDesc") }}</option>
+        <option value="updatedAsc">{{ t("sqlLibrary.updatedAsc") }}</option>
+        <option value="nameAsc">{{ t("sqlLibrary.nameAsc") }}</option>
+        <option value="nameDesc">{{ t("sqlLibrary.nameDesc") }}</option>
+        <option value="createdDesc">{{ t("sqlLibrary.createdDesc") }}</option>
+      </select>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto py-1">
@@ -1198,54 +1277,9 @@ function showDropInside(targetId: string) {
             "
           >
             <!-- Flat list sorted by date -->
-            <div v-if="sortMode === 'date'" class="space-y-0">
+            <div v-if="usesServerList" class="space-y-0">
               <div v-for="item in itemsByDate" :key="item.type + '-' + item.item.id">
                 <div
-                  v-if="item.type === 'folder'"
-                  class="relative flex items-center gap-1 px-2 py-1.5 text-[13px] cursor-pointer group"
-                  :class="[folderRowClass(item.item.id), isDraggingItem(item.item.id) ? 'opacity-50' : '']"
-                  @mousedown="handleDragMouseDown($event, item.item.id, 'folder')"
-                  @click="handleFolderClick(item.item, $event)"
-                  @contextmenu.capture="contextTarget = item.item"
-                  @contextmenu.prevent="
-                    contextTarget = item.item;
-                    onContextMenu($event);
-                  "
-                >
-                  <FolderClosed class="h-4 w-4 text-amber-500 shrink-0" />
-                  <template v-if="isRenamingFolder(item.item.id)">
-                    <input
-                      :ref="setRenameInputRef"
-                      v-model="renameValue"
-                      data-no-drag="true"
-                      class="min-w-0 flex-1 rounded border border-primary/50 bg-transparent px-1 text-[13px] outline-none"
-                      @keydown.enter.prevent="confirmRename"
-                      @keydown.escape.prevent="cancelRename"
-                      @blur="confirmRename"
-                      @mousedown.stop
-                      @click.stop
-                    />
-                  </template>
-                  <span v-else class="dbx-sql-library-drag-label min-w-0 flex-1 truncate">
-                    {{ item.item.name }}
-                    <span class="ml-1 text-muted-foreground">({{ folderFileCount(item.item.id) }})</span>
-                  </span>
-                  <LightTooltip v-if="!isRenamingFolder(item.item.id)" :text="t('savedSql.newSubfolder')" side="left" :delay="0" :close-delay="0" nowrap>
-                    <button
-                      type="button"
-                      data-no-drag="true"
-                      class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      :aria-label="t('savedSql.newSubfolder')"
-                      @mousedown.stop
-                      @click.stop="openNewFolderInput(item.item.id)"
-                    >
-                      <FolderPlus class="h-3.5 w-3.5" />
-                    </button>
-                  </LightTooltip>
-                </div>
-
-                <div
-                  v-else
                   class="relative flex items-center gap-1 px-2 py-1.5 text-[13px] cursor-pointer group"
                   :class="[fileRowClass(item.item.id), isDraggingItem(item.item.id) ? 'opacity-50' : '']"
                   @mousedown="handleDragMouseDown($event, item.item.id, 'file')"
@@ -1417,11 +1451,24 @@ function showDropInside(targetId: string) {
 
             <div v-if="!hasAnyVisibleItem" class="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
               <Library class="h-8 w-8 opacity-30" />
-              <p class="text-[13px]">{{ t("sqlLibrary.empty") }}</p>
+              <p class="text-[13px]">{{ searchLoading ? t("sqlLibrary.loading") : t("sqlLibrary.empty") }}</p>
             </div>
           </div>
         </template>
       </CustomContextMenu>
+    </div>
+
+    <div v-if="usesServerList && (searchTotal > 0 || searchLoading)" class="h-8 shrink-0 flex items-center justify-between gap-2 border-t px-2 text-[11px] text-muted-foreground">
+      <span>{{ t("sqlLibrary.total", { count: searchTotal }) }}</span>
+      <div class="flex items-center gap-1">
+        <Button variant="ghost" size="sm" class="h-6 px-2 text-[11px]" :disabled="searchLoading || searchPage <= 1" @click="searchPage--">
+          {{ t("sqlLibrary.prev") }}
+        </Button>
+        <span>{{ searchPage }} / {{ searchTotalPages }}</span>
+        <Button variant="ghost" size="sm" class="h-6 px-2 text-[11px]" :disabled="searchLoading || searchPage >= searchTotalPages" @click="searchPage++">
+          {{ t("sqlLibrary.next") }}
+        </Button>
+      </div>
     </div>
 
     <Dialog v-model:open="showDeleteConfirm">

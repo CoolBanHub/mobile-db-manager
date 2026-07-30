@@ -1584,6 +1584,7 @@ pub fn run() {
             commands::nacos_cmd::nacos_apply_config_transfer,
             commands::saved_sql::load_saved_sql_library,
             commands::saved_sql::load_saved_sql_file,
+            commands::saved_sql::search_saved_sql_files,
             commands::saved_sql::save_saved_sql_folder,
             commands::saved_sql::delete_saved_sql_folder,
             commands::saved_sql::save_saved_sql_file,

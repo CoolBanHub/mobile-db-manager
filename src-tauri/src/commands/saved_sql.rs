@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use dbx_core::connection::AppState;
-use dbx_core::saved_sql::{SavedSqlFile, SavedSqlFolder, SavedSqlLibrary};
+use dbx_core::saved_sql::{SavedSqlFile, SavedSqlFolder, SavedSqlLibrary, SavedSqlSearchRequest, SavedSqlSearchResult};
 
 #[derive(Clone)]
 pub struct SavedSqlStorageState {
@@ -41,6 +41,14 @@ pub async fn load_saved_sql_library(state: State<'_, Arc<AppState>>) -> Result<S
 #[tauri::command]
 pub async fn load_saved_sql_file(state: State<'_, Arc<AppState>>, id: String) -> Result<Option<SavedSqlFile>, String> {
     state.storage.load_saved_sql_file(&id).await
+}
+
+#[tauri::command]
+pub async fn search_saved_sql_files(
+    state: State<'_, Arc<AppState>>,
+    request: SavedSqlSearchRequest,
+) -> Result<SavedSqlSearchResult, String> {
+    state.storage.search_saved_sql_files(request).await
 }
 
 #[tauri::command]
