@@ -45,7 +45,7 @@ public class DirectDatabasePlugin extends Plugin {
             "drop", "truncate", "grant", "revoke", "call", "execute", "exec", "copy",
             "vacuum", "reindex", "attach", "detach", "load"));
     private static final Set<String> SUPPORTED_DATABASES = new HashSet<>(Arrays.asList(
-            "postgres", "mysql", "sqlserver"));
+            "postgres", "mysql", "sqlserver", "redis", "mongodb"));
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, Statement> runningStatements = new ConcurrentHashMap<>();
@@ -99,17 +99,23 @@ public class DirectDatabasePlugin extends Plugin {
             result.put("visibleDatabases", config.optJSONArray("visibleDatabases") == null ? new JSONArray() : config.optJSONArray("visibleDatabases"));
             result.put("visibleSchemas", config.optJSONObject("visibleSchemas") == null ? new JSONObject() : config.optJSONObject("visibleSchemas"));
             result.put("productionDatabases", config.optJSONArray("productionDatabases") == null ? new JSONArray() : config.optJSONArray("productionDatabases"));
-            result.put("redisConnectionMode", "standalone");
-            result.put("redisSentinelMaster", "");
-            result.put("redisSentinelNodes", "");
-            result.put("redisSentinelUsername", "");
-            result.put("hasRedisSentinelPassword", false);
-            result.put("redisSentinelTls", false);
-            result.put("redisClusterNodes", "");
+            result.put("redisConnectionMode", config.optString("redisConnectionMode", "standalone"));
+            result.put("redisSentinelMaster", config.optString("redisSentinelMaster"));
+            result.put("redisSentinelNodes", config.optString("redisSentinelNodes"));
+            result.put("redisSentinelUsername", config.optString("redisSentinelUsername"));
+            result.put("hasRedisSentinelPassword", !config.optString("redisSentinelPassword").isEmpty());
+            result.put("redisSentinelTls", config.optBoolean("redisSentinelTls", false));
+            result.put("redisClusterNodes", config.optString("redisClusterNodes"));
             result.put("jdbcDriverClass", "");
             result.put("jdbcDriverPaths", new JSONArray());
-            result.put("driverProfile", "android-native");
-            result.put("driverLabel", "Android bundled JDBC");
+            result.put("driverProfile", config.optString("driverProfile", "android-native"));
+            result.put("driverLabel", config.optString(
+                    "driverLabel",
+                    config.optString("dbType").equals("redis")
+                            ? "Android native Redis"
+                            : config.optString("dbType").equals("mongodb")
+                                    ? "Android bundled MongoDB"
+                                    : "Android bundled JDBC"));
             result.put("tunnelLayerCount",
                     (config.optBoolean("sshEnabled", false) ? 1 : 0)
                             + (config.optBoolean("proxyEnabled", false) ? 1 : 0));
@@ -122,7 +128,7 @@ public class DirectDatabasePlugin extends Plugin {
     public void saveConnection(PluginCall call) {
         run(call, () -> {
             JSONObject draft = requiredObject(call, "connection");
-            validateDraft(draft);
+            validateDraft(withStoredSecrets(draft));
             return summary(store().save(draft));
         });
     }
@@ -141,8 +147,17 @@ public class DirectDatabasePlugin extends Plugin {
     public void testConnection(PluginCall call) {
         run(call, () -> {
             JSONObject draft = requiredObject(call, "connection");
-            validateDraft(draft);
             JSONObject effective = withStoredSecrets(draft);
+            validateDraft(effective);
+            String type = effective.optString("dbType");
+            if (type.equals("redis")) {
+                DirectRedisConnection.test(effective);
+                return new JSObject().put("message", "手机已直接连接 Redis");
+            }
+            if (type.equals("mongodb")) {
+                DirectMongoConnection.test(effective);
+                return new JSObject().put("message", "手机已直接连接 MongoDB");
+            }
             try (Connection connection = open(effective, optionalDatabase(effective))) {
                 if (!connection.isValid(Math.max(1, draft.optInt("connectTimeoutSecs", 10)))) {
                     throw new SQLException("数据库没有通过连接有效性检查");
@@ -156,8 +171,9 @@ public class DirectDatabasePlugin extends Plugin {
     public void listDatabases(PluginCall call) {
         run(call, () -> {
             JSONObject draft = requiredObject(call, "connection");
-            validateDraft(draft);
-            return metadata(withStoredSecrets(draft), "databases", "", "", "", "", 500, 0);
+            JSONObject effective = withStoredSecrets(draft);
+            validateDraft(effective);
+            return metadata(effective, "databases", "", "", "", "", 500, 0);
         });
     }
 
@@ -451,12 +467,31 @@ public class DirectDatabasePlugin extends Plugin {
     private void validateDraft(JSONObject draft) {
         required(draft.optString("name"), "连接名称");
         if (draft.optString("host").trim().isEmpty() && draft.optString("connectionString").trim().isEmpty()) {
-            throw new IllegalArgumentException("主机或 JDBC 连接串不能为空");
+            throw new IllegalArgumentException("主机或数据库连接串不能为空");
         }
         if (draft.optInt("port") <= 0) throw new IllegalArgumentException("端口必须大于 0");
         String type = draft.optString("dbType");
         if (!SUPPORTED_DATABASES.contains(type)) {
-            throw new IllegalArgumentException("当前直连版本支持 PostgreSQL、MySQL/MariaDB 和 SQL Server");
+            throw new IllegalArgumentException("当前直连版本支持 PostgreSQL、MySQL/MariaDB、SQL Server、Redis 和 MongoDB");
+        }
+        if (type.equals("redis")
+                && !"standalone".equals(draft.optString("redisConnectionMode", "standalone"))) {
+            throw new IllegalArgumentException("Android 直连当前仅支持 Redis Standalone 模式");
+        }
+        if (type.equals("redis")) {
+            String database = optionalDatabase(draft).trim();
+            if (!database.isEmpty()) {
+                try {
+                    if (Integer.parseInt(database) < 0) throw new NumberFormatException();
+                } catch (NumberFormatException error) {
+                    throw new IllegalArgumentException("Redis 数据库必须是非负整数");
+                }
+            }
+        }
+        if (type.equals("mongodb")
+                && !draft.optString("connectionString").trim().isEmpty()
+                && (draft.optBoolean("sshEnabled", false) || draft.optBoolean("proxyEnabled", false))) {
+            throw new IllegalArgumentException("MongoDB URI 不能与 Android SSH/HTTP 隧道同时使用；请改填主机、端口和账号");
         }
         if (draft.optBoolean("proxyEnabled", false)) {
             if (!"http".equals(draft.optString("proxyType", "http"))) {
@@ -530,7 +565,8 @@ public class DirectDatabasePlugin extends Plugin {
         JSONObject effective = new JSONObject(incoming.toString());
         for (String name : new String[]{
                 "password", "proxyPassword", "sshPassword", "sshPrivateKey",
-                "sshPrivateKeyPassphrase", "connectionString", "clientKeyPath"}) {
+                "sshPrivateKeyPassphrase", "connectionString", "clientKeyPath",
+                "redisSentinelPassword"}) {
             if (effective.optString(name, "").isEmpty() && !existing.optString(name, "").isEmpty()) {
                 effective.put(name, existing.get(name));
             }

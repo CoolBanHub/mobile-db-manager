@@ -92,6 +92,7 @@ final class DirectConnectionStore {
                 || name.equals("sshPrivateKey")
                 || name.equals("sshPrivateKeyPassphrase")
                 || name.equals("connectionString")
-                || name.equals("clientKeyPath");
+                || name.equals("clientKeyPath")
+                || name.equals("redisSentinelPassword");
     }
 }

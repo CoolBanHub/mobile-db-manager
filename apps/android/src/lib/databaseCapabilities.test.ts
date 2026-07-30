@@ -8,8 +8,8 @@ describe("mobile database capabilities", () => {
   });
 
   it("routes only supported metadata models into relational browsing", () => {
-    expect(databaseCapability("mongodb").browse).toBe("mongodb");
-    expect(databaseCapability("redis").browse).toBe("redis");
+    expect(databaseCapability("mongodb").browse).toBe("unsupported");
+    expect(databaseCapability("redis").browse).toBe("unsupported");
     for (const type of ["elasticsearch", "etcd", "zookeeper", "hbase", "nacos", "mq", "qdrant"]) {
       expect(databaseCapability(type).browse).toBe("unsupported");
       expect(isMobileSqlDatabase(type)).toBe(false);

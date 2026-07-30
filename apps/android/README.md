@@ -97,7 +97,7 @@ HTTP script tunnels are not supported by the Android direct client.
 
 The standalone milestone contains:
 
-- bundled PostgreSQL, MySQL/MariaDB, and SQL Server drivers;
+- bundled PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB, and standalone Redis connection support;
 - create, edit, test, and delete for direct database profiles;
 - driver-native SSL modes, SSH local port forwarding, and HTTP CONNECT proxying;
 - AES-GCM encrypted profiles backed by Android Keystore; list/editor responses
@@ -111,10 +111,37 @@ The standalone milestone contains:
 - metadata-aware SQL completion, formatting, result export, cell/row copy;
 - local query history and a local saved-SQL library.
 
-Oracle, SQLite, DuckDB, ClickHouse, MongoDB, Redis, custom CA/client
-certificates, and the remaining DBX drivers are intentionally not advertised in
-this milestone. They need Android-compatible native drivers and device tests
-before being enabled.
+MongoDB and standalone Redis profiles can be created, edited, and tested on the
+device. Their specialized document/key browsers and Redis Sentinel/Cluster
+modes are not part of this milestone yet. Oracle, SQLite, DuckDB, ClickHouse,
+custom CA/client certificates, and the remaining DBX drivers need
+Android-compatible native drivers and device tests before being enabled.
+
+## 中文说明：数据库连接支持
+
+Android 版当前从手机原生进程直接连接数据库，不依赖 DBX Web 服务。连接配置和
+密码由 Android Keystore 支持的 AES-GCM 加密存储，WebView 只能使用连接 ID，
+无法读取已经保存的密码、私钥或完整连接串。
+
+| 数据库 | 新建/编辑 | 测试连接 | 数据浏览与查询 |
+| --- | --- | --- | --- |
+| PostgreSQL | 支持 | 支持 | 支持元数据、表数据和 SQL |
+| MySQL/MariaDB | 支持 | 支持 | 支持元数据、表数据和 SQL |
+| SQL Server | 支持 | 支持 | 支持元数据、表数据和 SQL |
+| MongoDB | 支持主机/端口或 URI | 支持 `ping` | 文档浏览器尚未开放 |
+| Redis | 支持 Standalone | 支持 AUTH、SELECT、PING | Key 浏览器尚未开放 |
+
+连接安全与限制：
+
+- 五种数据库均可使用系统 VPN；主机/端口模式支持 SSH 本地端口转发和 HTTP
+  CONNECT 代理。
+- MongoDB URI 已包含完整路由信息，不能同时启用应用内 SSH/HTTP 隧道；需要
+  隧道时应改用主机、端口、用户名和密码。
+- Redis 当前只支持 Standalone，暂不开放 Sentinel 和 Cluster。
+- TLS 的“仅加密”模式允许自签名证书但不验证服务器身份，只适合本地或受控
+  测试环境；生产环境应使用“验证 CA”或“验证 CA 和主机名”。
+- MongoDB 与 Redis 本阶段只开放连接配置和连通性测试，不会错误进入 JDBC
+  元数据、SQL、文档或 Key 浏览界面。
 
 Before producing a signed release, connect an Android device or start an emulator
 with API 26 or newer and run `pnpm android:device:test`. Add real-device smoke

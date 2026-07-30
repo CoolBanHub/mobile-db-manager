@@ -42,12 +42,13 @@ const editorMessage = ref("");
 const editorTone = ref<"success" | "danger" | "neutral">("neutral");
 const groupDraft = ref("未分组");
 const preferenceRevision = ref(0);
+const hasStoredConnectionString = ref(false);
 const sslCertificateError = computed(() =>
   editorTone.value === "danger" && editorMessage.value.startsWith("SSL 证书验证失败"),
 );
 
 const databaseTypes = mobileDatabaseCapabilities.filter((item) =>
-  ["postgres", "mysql", "sqlserver"].includes(item.value),
+  ["postgres", "mysql", "sqlserver", "redis", "mongodb"].includes(item.value),
 );
 
 function blankDraft(): MobileConnectionDraft {
@@ -184,6 +185,7 @@ function toggleFavorite(connection: MobileConnectionSummary) {
 
 function resetEditor() {
   Object.assign(draft, blankDraft());
+  hasStoredConnectionString.value = false;
   groupDraft.value = "未分组";
   preferenceEnvironment.value = "development";
   advancedOpen.value = false;
@@ -265,6 +267,7 @@ async function openEdit(connection: MobileConnectionSummary) {
       driverProfile: value.driverProfile,
       driverLabel: value.driverLabel,
     });
+    hasStoredConnectionString.value = value.hasConnectionString;
     const local = preference(connection);
     groupDraft.value = local.group;
     preferenceEnvironment.value = local.environment;
@@ -301,7 +304,7 @@ function openSslSettings() {
 }
 
 function validateDraft(): boolean {
-  if (!draft.name.trim() || (!draft.host.trim() && !draft.connectionString.trim()) || !draft.port) {
+  if (!draft.name.trim() || (!draft.host.trim() && !draft.connectionString.trim() && !hasStoredConnectionString.value) || !draft.port) {
     editorTone.value = "danger";
     editorMessage.value = "请填写连接名称、主机（或连接串）和端口。";
     return false;
@@ -491,7 +494,7 @@ function changeDatabaseType() {
         <div v-if="draft.dbType === 'redis'" class="special-editor">
           <div class="editor-grid">
             <label><span>Redis 模式</span><select v-model="draft.redisConnectionMode">
-              <option value="standalone">Standalone</option><option value="sentinel">Sentinel</option><option value="cluster">Cluster</option>
+              <option value="standalone">Standalone</option>
             </select></label>
             <template v-if="draft.redisConnectionMode === 'sentinel'">
               <label><span>Sentinel Master</span><input v-model="draft.redisSentinelMaster" /></label>

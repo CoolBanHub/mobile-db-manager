@@ -44,12 +44,6 @@ android {
     }
 }
 
-repositories {
-    flatDir{
-        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
-    }
-}
-
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
@@ -66,6 +60,7 @@ dependencies {
     // 3.5.6 keeps that validation lazy, so normal MySQL connections work on Android.
     implementation "org.mariadb.jdbc:mariadb-java-client:3.5.6"
     implementation "com.microsoft.sqlserver:mssql-jdbc:13.2.0.jre11"
+    implementation "org.mongodb:mongodb-driver-sync:3.12.14"
     implementation "com.github.mwiede:jsch:2.28.2"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
