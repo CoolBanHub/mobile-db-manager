@@ -1,8 +1,20 @@
 # DBX Mobile
 
-DBX Mobile is the Android client for a DBX Web server. The Android app owns the
-mobile interaction layer; database drivers, credentials, tunnels, and long-running
-jobs remain on the DBX server.
+DBX Mobile is a standalone Android database client. Bundled native JDBC drivers
+connect from the phone directly to the database; DBX Web is not required.
+Complete connection profiles are encrypted with an AES-GCM key held by Android
+Keystore. The WebView only refers to saved profiles by id after creation.
+
+## Architecture
+
+The Vue UI talks only to the local `DirectDatabase` Capacitor plugin through the
+`dbx-direct://local` adapter. Database connections, metadata reads, queries,
+cancellation, SSL, SSH, and HTTP proxy handling run in the Android native layer.
+The app has no DBX Web URL, Web login, mobile Bearer session, or `/api/mobile/*`
+server dependency.
+
+The route-shaped strings used inside the TypeScript adapter are local dispatch
+keys retained for UI component reuse; they are not HTTP endpoints.
 
 ## Requirements
 
@@ -17,7 +29,9 @@ jobs remain on the DBX server.
 pnpm dev:android
 ```
 
-The mobile Vite server runs on `http://localhost:5174`.
+The mobile Vite server runs on `http://localhost:5174`. Browser mode can render
+and test the interface, but it cannot open database connections because the
+drivers and credential vault exist only in the Android native layer.
 
 ## Android development
 
@@ -58,72 +72,50 @@ files and passwords are read only from the environment and must not be committed
 
 ## Network policy
 
-Release builds reject cleartext HTTP. Debug builds allow HTTP so a developer can
-connect to a DBX server on the local network. Production server profiles should
-always use HTTPS. Android API traffic uses the native per-profile transport, which
-supports an unauthenticated HTTP or SOCKS5 proxy, request cancellation/timeouts,
-SHA-256 leaf-certificate fingerprints or `sha256/BASE64` SPKI pins, and an explicit
-opt-in for invalid certificates. A configured pin is still enforced when invalid
-certificates are allowed.
+The phone must be able to reach the database host and port. Do not expose a
+production database port to the public internet. Prefer a system VPN such as
+WireGuard/Tailscale or an enterprise VPN, database IP allowlists, and a dedicated
+least-privilege database account.
+
+The connection editor provides independent SSL, SSH, and HTTP tabs:
+
+- SSL can be disabled, required without identity verification for local
+  self-signed environments, verified against a trusted CA, or verified against
+  both a trusted CA and the database host name.
+- SSH uses an in-process local port forward with password or pasted
+  OpenSSH/PEM private-key authentication. Pin the server's SHA256 host-key
+  fingerprint for production connections.
+- HTTP uses an HTTP CONNECT proxy with optional Basic authentication. When SSH
+  and HTTP are both enabled, the HTTP proxy is used as the SSH session's
+  upstream transport.
+
+Tunnel passwords, private keys, and passphrases are encrypted in the same
+Android Keystore-backed profile as database credentials. SOCKS5 and Navicat/PHP
+HTTP script tunnels are not supported by the Android direct client.
 
 ## Current milestone
 
-The current milestone contains:
+The standalone milestone contains:
 
-- the Android shell, server profile validation, and native Gradle project;
-- password login through a dedicated 30-day mobile Bearer session;
-- a 30-day device token encrypted with Android Keystore, with optional biometric
-  or system-credential unlock (web development keeps only a tab-scoped token);
-- multiple named DBX server profiles with quick switching and per-server request
-  timeout, proxy, certificate pinning, and invalid-certificate settings;
-- a display-safe connection catalog with create, edit, test, and delete workflows;
-- local connection groups, search, favorites, and development/staging/production
-  filters;
-- connection-level timeout, read-only/production protection, proxy, TLS, CA, and
-  client-certificate settings. Secret values are write-only from mobile and remain
-  in the DBX Server secret store.
-- drill-down browsing from database to Schema, table/view, and column metadata,
-  including indexes, foreign keys, constraints, triggers, DDL/view definitions,
-  and function/stored-procedure source;
-- paged table loading for large database catalogs.
-- a server-enforced read-only SQL workbench limited to one statement, 50-row
-  server pages (up to a 100,000-row offset), a 2 MiB response, a 30-second
-  statement timeout, and a 35-second overall server budget across supported SQL
-  databases, with dialect-aware write blocking;
-- a visible query cancellation action backed by server execution IDs; request
-  disconnects and client timeouts also trigger driver cancellation and cleanup;
-- metadata-aware SQL completion, formatting, table SELECT generation, and
-  field-driven WHERE/AND condition generation;
-- horizontally scrollable results with server-side next/previous page loading,
-  adjustable and auto-fit column widths, full cell details, and cell/row copy;
-- CSV, JSON, Markdown, and XLSX result export with spreadsheet-formula
-  neutralization where applicable, browser download fallback, and Android native
-  file sharing from the app cache;
-- PostgreSQL, MySQL, SQL Server, Oracle, SQLite, and ClickHouse table-data preview
-  with dialect-aware, server-enforced read-only pagination, adjustable page sizes,
-  field filters, field sorting with stable primary-key tie-breaking, and
-  metadata-driven SELECT templates that open directly in the query workbench;
-  table preview also includes full cell details, cell/row copy, adjustable and
-  auto-fit column widths, and current-page CSV/JSON/Markdown/XLSX export;
-- server-synchronized query history, including successful and failed mobile queries;
-- a server-synchronized saved SQL library with nested folders, create, open, overwrite,
-  rename, move, recursive folder deletion, search, and favorite-from-history actions.
+- bundled PostgreSQL, MySQL/MariaDB, and SQL Server drivers;
+- create, edit, test, and delete for direct database profiles;
+- driver-native SSL modes, SSH local port forwarding, and HTTP CONNECT proxying;
+- AES-GCM encrypted profiles backed by Android Keystore; list/editor responses
+  never return saved passwords or connection strings to the WebView;
+- local groups, search, favorites, and environment filters;
+- database, schema, table/view, column, index, foreign-key, and routine browsing
+  through JDBC metadata;
+- read-only SQL execution, guarded advanced writes, production-name confirmation,
+  statement timeouts, paging, and driver-level cancellation;
+- paged table preview with filters and sorting;
+- metadata-aware SQL completion, formatting, result export, cell/row copy;
+- local query history and a local saved-SQL library.
 
-Changing the DBX management password revokes every browser and mobile session.
-Explicit logout and server switching keep the local token until the server
-confirms revocation, so a failed network request can be retried.
-Authentication checks, login, and logout have an 8-second client-side timeout
-that covers both connection setup and response processing.
+Oracle, SQLite, DuckDB, ClickHouse, MongoDB, Redis, custom CA/client
+certificates, and the remaining DBX drivers are intentionally not advertised in
+this milestone. They need Android-compatible native drivers and device tests
+before being enabled.
 
 Before producing a signed release, connect an Android device or start an emulator
-with API 26 or newer and run `pnpm android:device:test`. The suite exercises the
-Android Keystore vault, secure-unlock capability, mobile login, connection editing,
-query cancellation, and file sharing through the real Capacitor WebView and native
-plugins. `pnpm android:release` runs the same connected-device gate automatically
-before creating the signed bundle. Use `pnpm android:device:test:build` when only
-compiling the instrumentation APK in CI.
-
-Database passwords, proxy passwords, connection strings, private-key contents,
-and initialization scripts are never returned by the mobile connection catalog
-endpoint. The authenticated editor endpoint returns only safe metadata, usernames,
-server-side certificate paths, and boolean “credential configured” indicators.
+with API 26 or newer and run `pnpm android:device:test`. Add real-device smoke
+coverage for each bundled database driver before publishing.

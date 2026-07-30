@@ -3,6 +3,11 @@
 Android work is isolated from the desktop application and developed on
 `feature/android-mvp`.
 
+The current Android architecture is standalone: the Vue UI calls the local
+`DirectDatabase` Capacitor plugin, and the native layer connects directly to the
+database. DBX Web mobile routes, server profiles, and mobile login sessions are
+not part of the Android runtime.
+
 ## Stable baseline
 
 The annotated tag `android-baseline-v0` points to the stable repository state
@@ -66,5 +71,6 @@ Available recovery points:
 - `android-mvp-v1`: runnable Android shell and server profile
 - `android-mvp-v2`: mobile login and display-safe connection catalog
 
-Server and device configuration formats must remain versioned and backward
-compatible. The initial server profile key is `dbx-mobile.server-profile.v1`.
+Device configuration formats must remain versioned and backward compatible.
+Legacy `dbx-mobile.server-profile.v1` data belongs to the retired DBX
+Web-dependent prototype and is not read by the standalone client.

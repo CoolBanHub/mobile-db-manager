@@ -1,7 +1,7 @@
 [![MCP Toplist](https://mcptoplist.com/badge/io.github.t8y2%2Fdbx.svg)](https://mcptoplist.com/server/io.github.t8y2%2Fdbx)
 
 <div align="center">
-  <p style="font-size: 18px; white-space: nowrap;"><strong>70+ databases in 20 MB. Desktop, Docker, CLI, built-in AI assistant, and MCP Server.</strong></p>
+  <p style="font-size: 18px; white-space: nowrap;"><strong>70+ databases in 20 MB. Desktop, Android, Docker, CLI, built-in AI assistant, and MCP Server.</strong></p>
 
   <p>
     <img src="https://dl.dbxio.com/assets/readme-hero-20260707.png" alt="DBX screenshot" width="820" />
@@ -82,8 +82,8 @@
       <p>DBX speaks the Model Context Protocol. Claude Code, Cursor, Windsurf, and other AI coding agents can query your databases through connections you already set up. One config, everywhere.</p>
     </td>
     <td>
-      <h3>🌐 Desktop + Docker + Web</h3>
-      <p>Native app on macOS, Windows, and Linux. Self-host via Docker for team access. Web version for browser-only environments. Same feature set. Same connections.</p>
+      <h3>🌐 Desktop + Android + Docker + Web</h3>
+      <p>Native app on macOS, Windows, and Linux. The standalone Android client connects directly with bundled drivers and does not require DBX Web. Docker and Web remain available for self-hosted browser access.</p>
     </td>
   </tr>
 </table>

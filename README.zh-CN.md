@@ -1,5 +1,5 @@
 <div align="center">
-  <p style="font-size: 18px; white-space: nowrap;"><strong>20 MB 驾驭 70+ 种数据库。桌面端、Docker、CLI、内置 AI 助手与 MCP Server。</strong></p>
+  <p style="font-size: 18px; white-space: nowrap;"><strong>20 MB 驾驭 70+ 种数据库。桌面端、Android、Docker、CLI、内置 AI 助手与 MCP Server。</strong></p>
 
   <p>
     <img src="https://dl.dbxio.com/assets/readme-hero-20260707.png" alt="DBX 截图" width="820" />
@@ -80,8 +80,8 @@
       <p>DBX 原生支持 Model Context Protocol。Claude Code、Cursor、Windsurf 等 AI 编程助手可以直接通过你已配置的数据库连接查询数据。一次配置，处处可用。</p>
     </td>
     <td>
-      <h3>🌐 桌面端 + Docker + Web</h3>
-      <p>macOS、Windows、Linux 原生应用。通过 Docker 自托管供团队访问。Web 版本适配纯浏览器环境。同样的功能，同样的连接配置。</p>
+      <h3>🌐 桌面端 + Android + Docker + Web</h3>
+      <p>macOS、Windows、Linux 原生应用。Android 客户端通过内置驱动直接连接数据库，不依赖 DBX Web。Docker 和 Web 版本继续用于自托管浏览器访问。</p>
     </td>
   </tr>
 </table>
