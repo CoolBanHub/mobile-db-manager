@@ -1,148 +1,139 @@
-# DBX Mobile
+# DBX 安卓端
 
-DBX Mobile is a standalone Android database client. Bundled native JDBC drivers
-connect from the phone directly to the database; DBX Web is not required.
-Complete connection profiles are encrypted with an AES-GCM key held by Android
-Keystore. The WebView only refers to saved profiles by id after creation.
+DBX 安卓端是一款可独立运行的移动数据库客户端。应用内置数据库驱动，手机直接
+连接数据库，不需要部署任何配套服务。
 
-## Architecture
+## 安卓端功能
 
-The Vue UI talks only to the local `DirectDatabase` Capacitor plugin through the
-`dbx-direct://local` adapter. Database connections, metadata reads, queries,
-cancellation, SSL, SSH, and HTTP proxy handling run in the Android native layer.
-The app has no DBX Web URL, Web login, mobile Bearer session, or `/api/mobile/*`
-server dependency.
+- 创建、编辑、测试和删除本机数据库连接。
+- 使用 Android Keystore AES-GCM 加密保存数据库密码、连接串、代理密码、
+  SSH 密码和私钥。
+- 支持连接搜索、分组、收藏以及开发、预发、生产环境标记。
+- 支持数据库、Schema、表、视图、字段、索引、外键和存储过程浏览。
+- 支持只读查询、高级写入、生产连接二次确认、查询超时和查询取消。
+- 支持结果分页、表数据筛选与排序、单元格修改、新增行和删除行。
+- 支持 SQL 格式化、参数替换、元数据补全、PostgreSQL/MySQL 执行计划和本机
+  SQL 文件。
+- 支持 CSV、JSON、Markdown、XLSX 导出并调用 Android 系统分享。
+- 支持本机查询历史和本机 SQL 收藏目录。
+- 支持数据库 TLS、SSH 本地端口转发和 HTTP CONNECT 代理。
 
-The route-shaped strings used inside the TypeScript adapter are local dispatch
-keys retained for UI component reuse; they are not HTTP endpoints.
+## 数据库支持
 
-## Requirements
+| 数据库 | 连接管理 | 连接测试 | 元数据与 SQL |
+| --- | --- | --- | --- |
+| PostgreSQL | 支持 | 支持 | 支持 |
+| MySQL / MariaDB | 支持 | 支持 | 支持 |
+| SQL Server | 支持 | 支持 | 支持 |
+| MongoDB | 支持主机端口或 URI | 支持 `ping` | 暂未提供文档浏览器 |
+| Redis | 支持 Standalone | 支持 AUTH、SELECT、PING | 暂未提供 Key 浏览器 |
 
-- Node.js 22.13 or newer
+MongoDB URI 已包含完整路由信息，不能同时启用应用内 SSH 或 HTTP 隧道。Redis
+当前只支持 Standalone，不支持 Sentinel 和 Cluster。
+
+## 本机数据与安全
+
+完整连接配置保存在应用私有目录，敏感字段由 Android Keystore 密钥加密。
+界面层只能通过连接 ID 调用原生插件，读取连接详情时不会返回已经保存的密码、
+SSH 私钥或完整连接串。
+
+生产环境建议：
+
+- 使用 WireGuard、Tailscale 或企业 VPN 接入数据库内网。
+- 配置数据库 IP 白名单，不要直接向公网开放数据库端口。
+- 使用独立的最小权限账号。
+- 开启生产连接保护，写入前必须输入完整连接名称。
+- TLS 优先选择“验证证书和主机名”；“仅加密”只用于受控的自签名环境。
+- SSH 连接填写服务器 SHA256 主机密钥指纹。
+
+## 开发环境
+
+- Node.js 22.13 或更高版本
 - pnpm 10.27.0
-- Android Studio with Android SDK 36
-- JDK 21 (the Android Studio bundled runtime is supported)
+- JDK 21
+- Android SDK 36
+- Android 8.0（API 26）或更高版本的设备或模拟器
 
-## Web development
+## 构建安卓应用
+
+在仓库根目录安装依赖：
 
 ```bash
-pnpm dev:android
+pnpm install --frozen-lockfile
 ```
 
-The mobile Vite server runs on `http://localhost:5174`. Browser mode can render
-and test the interface, but it cannot open database connections because the
-drivers and credential vault exist only in the Android native layer.
-
-## Android development
+构建前端资源并同步到 Android 工程：
 
 ```bash
 pnpm android:sync
-pnpm android:open
 ```
 
-Build a debug APK without opening Android Studio:
+构建 Debug APK：
 
 ```bash
-JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" pnpm android:build:debug
+pnpm android:build:debug
 ```
 
-The APK is written to:
+输出文件：
 
 ```text
 apps/android/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Build an unsigned release bundle for CI/build validation:
+打开 Android Studio：
 
 ```bash
-pnpm android:build:bundle
+pnpm android:open
 ```
 
-For a signed Play-ready bundle, set `DBX_ANDROID_KEYSTORE`,
-`DBX_ANDROID_STORE_PASSWORD`, `DBX_ANDROID_KEY_ALIAS`, and
-`DBX_ANDROID_KEY_PASSWORD`, then run:
+运行安卓端单元测试：
 
 ```bash
-DBX_ANDROID_VERSION_CODE=2 DBX_ANDROID_VERSION_NAME=0.1.1 pnpm android:release
+cd apps/android/android
+./gradlew :app:testDebugUnitTest
 ```
 
-The signed bundle is written to
-`apps/android/android/app/build/outputs/bundle/release/app-release.aab`. Keystore
-files and passwords are read only from the environment and must not be committed.
+连接设备后运行仪器测试：
 
-## Network policy
+```bash
+pnpm android:device:test
+```
 
-The phone must be able to reach the database host and port. Do not expose a
-production database port to the public internet. Prefer a system VPN such as
-WireGuard/Tailscale or an enterprise VPN, database IP allowlists, and a dedicated
-least-privilege database account.
+## 发布签名
 
-The connection editor provides independent SSL, SSH, and HTTP tabs:
+发布前设置以下环境变量：
 
-- SSL can be disabled, required without identity verification for local
-  self-signed environments, verified against a trusted CA, or verified against
-  both a trusted CA and the database host name.
-- SSH uses an in-process local port forward with password or pasted
-  OpenSSH/PEM private-key authentication. Pin the server's SHA256 host-key
-  fingerprint for production connections.
-- HTTP uses an HTTP CONNECT proxy with optional Basic authentication. When SSH
-  and HTTP are both enabled, the HTTP proxy is used as the SSH session's
-  upstream transport.
+- `DBX_ANDROID_KEYSTORE`
+- `DBX_ANDROID_STORE_PASSWORD`
+- `DBX_ANDROID_KEY_ALIAS`
+- `DBX_ANDROID_KEY_PASSWORD`
+- `DBX_ANDROID_VERSION_CODE`
+- `DBX_ANDROID_VERSION_NAME`
 
-Tunnel passwords, private keys, and passphrases are encrypted in the same
-Android Keystore-backed profile as database credentials. SOCKS5 and Navicat/PHP
-HTTP script tunnels are not supported by the Android direct client.
+然后执行：
 
-## Current milestone
+```bash
+pnpm android:release
+```
 
-The standalone milestone contains:
+发布包输出到：
 
-- bundled PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB, and standalone Redis connection support;
-- create, edit, test, and delete for direct database profiles;
-- driver-native SSL modes, SSH local port forwarding, and HTTP CONNECT proxying;
-- AES-GCM encrypted profiles backed by Android Keystore; list/editor responses
-  never return saved passwords or connection strings to the WebView;
-- local groups, search, favorites, and environment filters;
-- database, schema, table/view, column, index, foreign-key, and routine browsing
-  through JDBC metadata;
-- read-only SQL execution, guarded advanced writes, production-name confirmation,
-  statement timeouts, paging, and driver-level cancellation;
-- paged table preview with filters and sorting;
-- metadata-aware SQL completion, formatting, result export, cell/row copy;
-- local query history and a local saved-SQL library.
+```text
+apps/android/android/app/build/outputs/bundle/release/app-release.aab
+```
 
-MongoDB and standalone Redis profiles can be created, edited, and tested on the
-device. Their specialized document/key browsers and Redis Sentinel/Cluster
-modes are not part of this milestone yet. Oracle, SQLite, DuckDB, ClickHouse,
-custom CA/client certificates, and the remaining DBX drivers need
-Android-compatible native drivers and device tests before being enabled.
+密钥库和密码只能通过环境变量提供，不得提交到仓库。
 
-## 中文说明：数据库连接支持
+## Android 驱动兼容层
 
-Android 版当前从手机原生进程直接连接数据库，不依赖 DBX Web 服务。连接配置和
-密码由 Android Keystore 支持的 AES-GCM 加密存储，WebView 只能使用连接 ID，
-无法读取已经保存的密码、私钥或完整连接串。
+Android 不包含完整 Java SE 的 `java.lang.management` 和 JMX。构建脚本会为
+以下驱动生成 Android 专用兼容 Jar：
 
-| 数据库 | 新建/编辑 | 测试连接 | 数据浏览与查询 |
-| --- | --- | --- | --- |
-| PostgreSQL | 支持 | 支持 | 支持元数据、表数据和 SQL |
-| MySQL/MariaDB | 支持 | 支持 | 支持元数据、表数据和 SQL |
-| SQL Server | 支持 | 支持 | 支持元数据、表数据和 SQL |
-| MongoDB | 支持主机/端口或 URI | 支持 `ping` | 文档浏览器尚未开放 |
-| Redis | 支持 Standalone | 支持 AUTH、SELECT、PING | Key 浏览器尚未开放 |
+- PostgreSQL：替换结果缓冲区内存检测。
+- MySQL / MariaDB：移除连接池 JMX 注册。
+- SQL Server：替换结果缓冲区内存检测。
+- MongoDB：移除 JMX 监听和注册。
 
-连接安全与限制：
-
-- 五种数据库均可使用系统 VPN；主机/端口模式支持 SSH 本地端口转发和 HTTP
-  CONNECT 代理。
-- MongoDB URI 已包含完整路由信息，不能同时启用应用内 SSH/HTTP 隧道；需要
-  隧道时应改用主机、端口、用户名和密码。
-- Redis 当前只支持 Standalone，暂不开放 Sentinel 和 Cluster。
-- TLS 的“仅加密”模式允许自签名证书但不验证服务器身份，只适合本地或受控
-  测试环境；生产环境应使用“验证 CA”或“验证 CA 和主机名”。
-- MongoDB 与 Redis 本阶段只开放连接配置和连通性测试，不会错误进入 JDBC
-  元数据、SQL、文档或 Key 浏览界面。
-
-Before producing a signed release, connect an Android device or start an emulator
-with API 26 or newer and run `pnpm android:device:test`. Add real-device smoke
-coverage for each bundled database driver before publishing.
+兼容实现使用 `Runtime.getRuntime().maxMemory()` 或无操作监控实现，不改变
+DBX 安卓端使用的普通连接、查询和连接池行为。不要在 `implementation` 中
+重新加入未经处理的原始驱动 Jar，否则会恢复 Android 运行时类解析错误。
