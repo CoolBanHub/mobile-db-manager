@@ -221,3 +221,27 @@ export async function exportQueryResult(
   });
   return { filename, format, delivery: "share" };
 }
+
+export async function shareQueryExportText(
+  data: string,
+  filename: string,
+  title = "DBX 完整查询结果",
+): Promise<"share" | "download"> {
+  const artifact = { data, mime: "text/csv;charset=utf-8" };
+  if (!Capacitor.isNativePlatform()) {
+    downloadArtifact(filename, artifact);
+    return "download";
+  }
+  const [{ Directory, Encoding, Filesystem }, { Share }] = await Promise.all([
+    import("@capacitor/filesystem"),
+    import("@capacitor/share"),
+  ]);
+  const written = await Filesystem.writeFile({
+    path: filename,
+    data,
+    directory: Directory.Cache,
+    encoding: Encoding.UTF8,
+  });
+  await Share.share({ title, files: [written.uri], dialogTitle: title });
+  return "share";
+}

@@ -8,12 +8,14 @@ import {
   type ColumnInfo,
   type DatabaseInfo,
   type MobileConnectionSummary,
+  type MobileMultiQueryResult,
   type MobileQueryDraft,
+  type MobileTransactionResponse,
   type QueryResult,
   type SavedSqlFile,
   type TableInfo,
 } from "../lib/mobileApi";
-import { exportQueryResult, type QueryExportFormat } from "../lib/queryExport";
+import { exportQueryResult, shareQueryExportText, type QueryExportFormat } from "../lib/queryExport";
 import {
   applySqlSuggestion,
   buildColumnCondition,
@@ -23,6 +25,9 @@ import {
   sqlSuggestions,
   type SqlSuggestion,
 } from "../lib/sqlEditor";
+import { parseSqlParameterJson, resolveSqlParameters } from "../lib/sqlParameters";
+
+type ExecutionMode = "safe" | "advanced" | "script" | "transaction";
 
 const props = defineProps<{
   baseUrl: string;
@@ -42,6 +47,22 @@ const tableSearch = ref("");
 const columns = ref<ColumnInfo[]>([]);
 const selectedTable = ref<TableInfo | null>(null);
 const sql = ref("SELECT 1;");
+const executionMode = ref<ExecutionMode>("safe");
+const parameterJson = ref("");
+const showParameters = ref(false);
+const confirmedWrite = ref(false);
+const productionConfirmation = ref("");
+const continueOnError = ref(false);
+const transactionId = ref("");
+const resultSets = ref<MobileMultiQueryResult[]>([]);
+const activeResultIndex = ref(0);
+const explainResult = ref("");
+const explaining = ref(false);
+const aiPrompt = ref("");
+const aiRunning = ref(false);
+const showChart = ref(false);
+const cellEditValue = ref("");
+const pendingCellEdits = ref<Array<{ rowIndex: number; columnIndex: number; value: string }>>([]);
 const editorElement = ref<HTMLTextAreaElement | null>(null);
 const suggestions = ref<SqlSuggestion[]>([]);
 const result = ref<QueryResult | null>(null);
@@ -61,6 +82,7 @@ const savedSqlFolderId = ref<string | null>(null);
 const saving = ref(false);
 const saveStatus = ref("");
 const exporting = ref(false);
+const fullExporting = ref(false);
 const exportStatus = ref("");
 const exportFormat = ref<QueryExportFormat>("csv");
 const columnWidths = ref<Record<number, number>>({});
@@ -83,6 +105,24 @@ let tableSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const selectedConnection = computed(() => props.connections.find((item) => item.id === connectionId.value));
 const resultPage = computed(() => Math.floor(resultOffset.value / SERVER_PAGE_SIZE) + 1);
+const advancedMode = computed(() => executionMode.value !== "safe");
+const writeAllowed = computed(() => selectedConnection.value && !selectedConnection.value.readOnly);
+const productionConfirmed = computed(
+  () => !selectedConnection.value?.isProduction || productionConfirmation.value.trim() === selectedConnection.value.name,
+);
+const chartRows = computed(() => {
+  if (!result.value || result.value.columns.length < 2) return [];
+  const numericColumn = result.value.columns.findIndex((_, index) =>
+    result.value!.rows.some((row) => typeof row[index] === "number"),
+  );
+  if (numericColumn < 0) return [];
+  const values = result.value.rows
+    .slice(0, 20)
+    .map((row) => ({ label: displayValue(row[0]), value: Number(row[numericColumn]) }))
+    .filter((item) => Number.isFinite(item.value));
+  const maximum = Math.max(1, ...values.map((item) => Math.abs(item.value)));
+  return values.map((item) => ({ ...item, width: (Math.abs(item.value) / maximum) * 100 }));
+});
 const tables = computed(() => mergeTableMetadata(browsedTables.value, tableSearchResults.value));
 const visibleTables = computed(() =>
   tableSearch.value.trim() ? tableSearchResults.value : browsedTables.value,
@@ -112,6 +152,15 @@ function invalidateQuery() {
   queryRequestId++;
   exportRequestId++;
   if (activeExecutionId) void requestServerCancellation(activeExecutionId, true).catch(() => undefined);
+  if (transactionId.value) {
+    void apiFetch(
+      props.baseUrl,
+      `/api/mobile/transactions/${encodeURIComponent(transactionId.value)}`,
+      props.token,
+      { method: "DELETE" },
+    ).catch(() => undefined);
+    transactionId.value = "";
+  }
   queryController?.abort();
   queryController = null;
   activeExecutionId = null;
@@ -119,10 +168,188 @@ function invalidateQuery() {
   cancelling.value = false;
   exporting.value = false;
   result.value = null;
+  resultSets.value = [];
+  activeResultIndex.value = 0;
+  explainResult.value = "";
   exportStatus.value = "";
   resultOffset.value = 0;
   columnWidths.value = {};
   selectedCell.value = null;
+}
+
+function executableSql() {
+  return resolveSqlParameters(sql.value, parseSqlParameterJson(parameterJson.value));
+}
+
+function selectResultSet(index: number) {
+  const next = resultSets.value[index];
+  if (!next) return;
+  activeResultIndex.value = index;
+  result.value = next;
+  resultOffset.value = 0;
+  selectedCell.value = null;
+}
+
+async function executeAdvanced() {
+  const requestId = ++queryRequestId;
+  const executionId = createExecutionId();
+  activeExecutionId = executionId;
+  executing.value = true;
+  error.value = "";
+  result.value = null;
+  resultSets.value = [];
+  try {
+    const resolvedSql = executableSql();
+    const response =
+      executionMode.value === "transaction" && transactionId.value
+        ? await apiPostJson<QueryResult[]>(
+            props.baseUrl,
+            `/api/mobile/transactions/${encodeURIComponent(transactionId.value)}`,
+            props.token,
+            {
+              connectionId: connectionId.value,
+              database: database.value,
+              schema: schema.value || null,
+              sql: resolvedSql,
+              confirmedWrite: confirmedWrite.value,
+              productionConfirmation: productionConfirmation.value || null,
+            },
+            { timeoutMs: 130_000 },
+          )
+        : await apiPostJson<MobileMultiQueryResult[]>(
+            props.baseUrl,
+            "/api/mobile/query/advanced",
+            props.token,
+            {
+              connectionId: connectionId.value,
+              database: database.value,
+              schema: schema.value || null,
+              sql: resolvedSql,
+              executionId,
+              continueOnError: executionMode.value === "script" && continueOnError.value,
+              confirmedWrite: confirmedWrite.value,
+              productionConfirmation: productionConfirmation.value || null,
+            },
+            { timeoutMs: 130_000 },
+          );
+    if (requestId !== queryRequestId) return;
+    resultSets.value = response.map((item) => item as MobileMultiQueryResult);
+    selectResultSet(0);
+  } catch (reason) {
+    if (requestId === queryRequestId) fail(reason);
+  } finally {
+    if (requestId === queryRequestId) {
+      executing.value = false;
+      activeExecutionId = null;
+    }
+  }
+}
+
+async function beginTransaction() {
+  if (!writeAllowed.value || !productionConfirmed.value) return;
+  error.value = "";
+  try {
+    const response = await apiPostJson<MobileTransactionResponse>(
+      props.baseUrl,
+      "/api/mobile/transactions",
+      props.token,
+      {
+        connectionId: connectionId.value,
+        database: database.value,
+        schema: schema.value || null,
+        productionConfirmation: productionConfirmation.value || null,
+      },
+      { timeoutMs: 15_000 },
+    );
+    transactionId.value = response.transactionId;
+    exportStatus.value = "手动事务已开始；5 分钟无操作将自动回滚";
+  } catch (reason) {
+    fail(reason);
+  }
+}
+
+async function finishTransaction(commit: boolean) {
+  if (!transactionId.value) return;
+  error.value = "";
+  try {
+    await apiFetch(
+      props.baseUrl,
+      `/api/mobile/transactions/${encodeURIComponent(transactionId.value)}`,
+      props.token,
+      { method: commit ? "PUT" : "DELETE", headers: { Accept: "application/json" } },
+    ).then(async (response) => {
+      if (!response.ok) throw new ApiError(await response.text(), response.status);
+    });
+    exportStatus.value = commit ? "事务已提交" : "事务已回滚";
+    transactionId.value = "";
+  } catch (reason) {
+    fail(reason);
+  }
+}
+
+async function explainQuery() {
+  explaining.value = true;
+  error.value = "";
+  explainResult.value = "";
+  try {
+    explainResult.value = await apiPostJson<string>(
+      props.baseUrl,
+      "/api/mobile/query/explain",
+      props.token,
+      {
+        connectionId: connectionId.value,
+        database: database.value,
+        schema: schema.value || null,
+        sql: executableSql(),
+        mode: "explain",
+      },
+      { timeoutMs: 45_000 },
+    );
+  } catch (reason) {
+    fail(reason);
+  } finally {
+    explaining.value = false;
+  }
+}
+
+async function askAi() {
+  if (!aiPrompt.value.trim()) return;
+  aiRunning.value = true;
+  error.value = "";
+  try {
+    sql.value = await apiPostJson<string>(
+      props.baseUrl,
+      "/api/mobile/query/ai",
+      props.token,
+      {
+        prompt: aiPrompt.value,
+        connectionId: connectionId.value,
+        database: database.value,
+        schema: schema.value || null,
+        currentSql: sql.value,
+      },
+      { timeoutMs: 120_000 },
+    );
+    aiPrompt.value = "";
+  } catch (reason) {
+    fail(reason);
+  } finally {
+    aiRunning.value = false;
+  }
+}
+
+async function openSqlFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (file.size > 1024 * 1024) {
+    error.value = "移动端直接打开的 SQL 文件不能超过 1 MiB；更大的脚本请使用后台 SQL 文件执行";
+    input.value = "";
+    return;
+  }
+  sql.value = await file.text();
+  executionMode.value = "script";
+  input.value = "";
 }
 
 async function selectConnection(preferredDatabase?: string, preferredSchema?: string | null) {
@@ -148,7 +375,7 @@ async function selectConnection(preferredDatabase?: string, preferredSchema?: st
   loadingContext.value = true;
   error.value = "";
   try {
-    const response = await apiGetJson<DatabaseInfo[]>(props.baseUrl, "/api/schema/databases", props.token, {
+    const response = await apiGetJson<DatabaseInfo[]>(props.baseUrl, "/api/mobile/schema/databases", props.token, {
       connection_id: requestedConnectionId,
     });
     if (requestId !== connectionRequestId || connectionId.value !== requestedConnectionId) return;
@@ -176,7 +403,7 @@ async function selectDatabase(preferredSchema?: string | null) {
   result.value = null;
   if (!requestedConnectionId || !requestedDatabase) return;
   try {
-    const response = await apiGetJson<string[]>(props.baseUrl, "/api/schema/schemas", props.token, {
+    const response = await apiGetJson<string[]>(props.baseUrl, "/api/mobile/schema/schemas", props.token, {
       connection_id: requestedConnectionId,
       database: requestedDatabase,
       apply_visible_filter: "true",
@@ -235,7 +462,7 @@ async function loadTables() {
 }
 
 function fetchTablePage(filter: string, offset: number) {
-  return apiGetJson<TableInfo[]>(props.baseUrl, "/api/schema/tables", props.token, {
+  return apiGetJson<TableInfo[]>(props.baseUrl, "/api/mobile/schema/tables", props.token, {
     connection_id: connectionId.value,
     database: database.value,
     schema: schema.value,
@@ -309,7 +536,7 @@ async function openTable(table: TableInfo) {
   columns.value = [];
   loadingMetadata.value = true;
   try {
-    columns.value = await apiGetJson<ColumnInfo[]>(props.baseUrl, "/api/schema/columns", props.token, {
+    columns.value = await apiGetJson<ColumnInfo[]>(props.baseUrl, "/api/mobile/schema/columns", props.token, {
       connection_id: connectionId.value,
       database: database.value,
       schema: schema.value,
@@ -388,7 +615,8 @@ async function saveCurrentSql() {
     savedSqlId.value = saved.id;
     savedSqlFolderId.value = saved.folderId;
     saveName.value = saved.name.replace(/\.sql$/i, "");
-    saveStatus.value = wasUpdate ? "已覆盖更新并同步到 DBX Server" : "已同步到 DBX Server";
+    const target = "本机 SQL 库";
+    saveStatus.value = wasUpdate ? `已覆盖更新到${target}` : `已保存到${target}`;
   } catch (reason) {
     fail(reason);
   } finally {
@@ -408,6 +636,7 @@ watch(
   async (draft) => {
     if (!draft) return;
     sql.value = draft.sql;
+    executionMode.value = draft.executionMode ?? "safe";
     connectionId.value = draft.connectionId;
     savedSqlId.value = draft.savedSqlId ?? "";
     savedSqlFolderId.value = draft.savedSqlFolderId ?? null;
@@ -469,7 +698,7 @@ async function executePage(offset: number) {
 }
 
 function execute() {
-  return executePage(0);
+  return executionMode.value === "safe" ? executePage(0) : executeAdvanced();
 }
 
 async function cancelQuery() {
@@ -479,7 +708,7 @@ async function cancelQuery() {
   error.value = "";
   try {
     await requestServerCancellation(executionId);
-    error.value = "查询已取消，服务端正在清理数据库任务";
+    error.value = "查询已取消，手机正在释放数据库语句";
   } catch (reason) {
     error.value = reason instanceof Error ? `取消请求未确认：${reason.message}` : "取消请求未确认";
   } finally {
@@ -518,6 +747,68 @@ async function shareResult() {
     }
   } finally {
     if (requestId === exportRequestId) exporting.value = false;
+  }
+}
+
+async function exportFullResult() {
+  if (executionMode.value !== "safe" || fullExporting.value) return;
+  fullExporting.value = true;
+  error.value = "";
+  exportStatus.value = "后台导出任务正在启动…";
+  const exportId = createExecutionId();
+  try {
+    const resolvedSql = executableSql();
+    await apiPostJson<{ exportId: string }>(
+      props.baseUrl,
+      "/api/export/query-result",
+      props.token,
+      {
+        request: {
+          exportId,
+          connectionId: connectionId.value,
+          database: database.value,
+          schema: schema.value || null,
+          sql: resolvedSql,
+          queryBaseSql: resolvedSql,
+          setupSql: [],
+          databaseType: selectedConnection.value?.dbType,
+          useAgentCursor: false,
+          filePath: "",
+          format: "csv",
+          includeSqlSheet: false,
+          pageSize: 1000,
+          rowLimit: null,
+          timeoutSecs: 600,
+          keysetOptimizationEnabled: true,
+          executionId: `mobile-export-${exportId}`,
+        },
+      },
+      { timeoutMs: 15_000 },
+    );
+    exportStatus.value = "Android 原生驱动正在导出完整结果…";
+    const progress = await apiFetch(
+      props.baseUrl,
+      `/api/export/query-result/progress/${encodeURIComponent(exportId)}`,
+      props.token,
+      { headers: { Accept: "text/event-stream" } },
+    );
+    const progressText = await progress.text();
+    if (!progress.ok || /"status":"error"/i.test(progressText)) throw new Error("本机导出失败");
+    const download = await apiFetch(
+      props.baseUrl,
+      `/api/export/query-result/download/${encodeURIComponent(exportId)}`,
+      props.token,
+      { headers: { Accept: "text/csv" } },
+    );
+    if (!download.ok) throw new Error(await download.text());
+    const csv = await download.text();
+    const filename = `dbx-full-${database.value}-${new Date().toISOString().replaceAll(":", "-")}.csv`;
+    const delivery = await shareQueryExportText(csv, filename);
+    exportStatus.value = delivery === "share" ? `完整结果已打开分享面板 · ${filename}` : `完整结果已下载 · ${filename}`;
+  } catch (reason) {
+    error.value = reason instanceof Error ? `完整导出失败：${reason.message}` : "完整导出失败";
+  } finally {
+    fullExporting.value = false;
   }
 }
 
@@ -568,6 +859,67 @@ function openCell(rowIndex: number, columnIndex: number, value: unknown) {
     columnIndex,
     value,
   };
+  cellEditValue.value = value === null ? "NULL" : cellText(value);
+}
+
+function queueCellEdit() {
+  if (!selectedCell.value) return;
+  const key = `${selectedCell.value.pageRowIndex}:${selectedCell.value.columnIndex}`;
+  pendingCellEdits.value = [
+    ...pendingCellEdits.value.filter((item) => `${item.rowIndex}:${item.columnIndex}` !== key),
+    {
+      rowIndex: selectedCell.value.pageRowIndex,
+      columnIndex: selectedCell.value.columnIndex,
+      value: cellEditValue.value,
+    },
+  ];
+  exportStatus.value = `已暂存 ${pendingCellEdits.value.length} 个单元格修改`;
+  selectedCell.value = null;
+}
+
+function quotedIdentifier(value: string) {
+  const dbType = selectedConnection.value?.dbType;
+  if (["mysql", "clickhouse", "doris", "starrocks"].includes(dbType ?? "")) return `\`${value.replaceAll("`", "``")}\``;
+  if (dbType === "sqlserver") return `[${value.replaceAll("]", "]]")}]`;
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function editedSqlLiteral(value: string, original: unknown) {
+  if (value.trim().toUpperCase() === "NULL") return "NULL";
+  if (typeof original === "number" && Number.isFinite(Number(value))) return String(Number(value));
+  if (typeof original === "boolean" && /^(true|false)$/i.test(value.trim())) return value.trim().toUpperCase();
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function buildPendingUpdateSql() {
+  if (!selectedTable.value || !result.value || pendingCellEdits.value.length === 0) return;
+  const primaryKeys = columns.value.filter((column) => column.is_primary_key);
+  const keyIndexes = primaryKeys.map((column) => result.value!.columns.indexOf(column.name));
+  if (!primaryKeys.length || keyIndexes.some((index) => index < 0)) {
+    error.value = "可编辑结果需要所选表的主键字段出现在结果集中";
+    return;
+  }
+  const tableName = schema.value
+    ? `${quotedIdentifier(schema.value)}.${quotedIdentifier(selectedTable.value.name)}`
+    : quotedIdentifier(selectedTable.value.name);
+  const statements = pendingCellEdits.value.map((edit) => {
+    const row = result.value!.rows[edit.rowIndex];
+    const column = result.value!.columns[edit.columnIndex];
+    const predicates = primaryKeys.map((key, index) => {
+      const original = row[keyIndexes[index]];
+      return original === null
+        ? `${quotedIdentifier(key.name)} IS NULL`
+        : `${quotedIdentifier(key.name)} = ${editedSqlLiteral(cellText(original), original)}`;
+    });
+    return `UPDATE ${tableName} SET ${quotedIdentifier(column)} = ${editedSqlLiteral(edit.value, row[edit.columnIndex])} WHERE ${predicates.join(" AND ")};`;
+  });
+  sql.value = statements.join("\n");
+  executionMode.value = "advanced";
+  confirmedWrite.value = false;
+  pendingCellEdits.value = [];
+  result.value = null;
+  resultSets.value = [];
+  exportStatus.value = "批量改单元格 SQL 已生成；请审阅并显式确认写操作";
 }
 
 function copySelectedCell() {
@@ -609,9 +961,43 @@ function autoFitColumns() {
     </div>
     <div class="editor">
       <div class="editor-heading">
-        <span>SERVER-ENFORCED READ ONLY</span>
-        <small>单条 SQL · 服务端 50 行/页 · 2 MiB · 30 秒</small>
+        <span>{{ executionMode === "safe" ? "SERVER-ENFORCED READ ONLY" : "CONTROLLED ADVANCED SQL" }}</span>
+        <small>{{ executionMode === "safe" ? "单条 · 50 行/页 · 2 MiB · 30 秒" : "显式写确认 · 最多 100 条 · 每结果 500 行" }}</small>
         <button type="button" aria-label="格式化 SQL" @click="formatCurrentSql">FORMAT</button>
+      </div>
+      <div class="execution-modes">
+        <button v-for="mode in [
+          ['safe', '安全只读'],
+          ['advanced', '高级执行'],
+          ['script', '脚本 / 批量'],
+          ['transaction', '手动事务'],
+        ]" :key="mode[0]" :class="{ active: executionMode === mode[0] }" type="button" @click="executionMode = mode[0] as ExecutionMode">
+          {{ mode[1] }}
+        </button>
+      </div>
+      <div v-if="advancedMode" class="advanced-guard">
+        <label>
+          <input v-model="confirmedWrite" type="checkbox" :disabled="!writeAllowed" />
+          <span>{{ writeAllowed ? "允许本次执行包含 INSERT / UPDATE / DELETE / DDL" : "该连接为只读，写操作不可用" }}</span>
+        </label>
+        <input
+          v-if="selectedConnection?.isProduction"
+          v-model="productionConfirmation"
+          :placeholder="`生产库确认：输入 ${selectedConnection.name}`"
+          autocomplete="off"
+        />
+        <label v-if="executionMode === 'script'">
+          <input v-model="continueOnError" type="checkbox" />
+          <span>单条失败后继续执行后续语句</span>
+        </label>
+        <div v-if="executionMode === 'transaction'" class="transaction-actions">
+          <button v-if="!transactionId" :disabled="!writeAllowed || !productionConfirmed" type="button" @click="beginTransaction">BEGIN</button>
+          <template v-else>
+            <b>TX {{ transactionId.slice(0, 8) }}</b>
+            <button type="button" @click="finishTransaction(true)">COMMIT</button>
+            <button class="danger" type="button" @click="finishTransaction(false)">ROLLBACK</button>
+          </template>
+        </div>
       </div>
       <div class="editor-input">
         <textarea
@@ -638,9 +1024,22 @@ function autoFitColumns() {
           </button>
         </div>
       </div>
+      <div class="editor-tools">
+        <button type="button" @click="showParameters = !showParameters">PARAMS</button>
+        <label class="file-action">OPEN .SQL<input type="file" accept=".sql,.txt,text/plain,application/sql" @change="openSqlFile" /></label>
+        <button :disabled="explaining || !database || !sql.trim()" type="button" @click="explainQuery">{{ explaining ? "EXPLAINING" : "EXPLAIN" }}</button>
+      </div>
+      <div v-if="showParameters" class="parameter-editor">
+        <span>JSON PARAMETERS · 支持 :name、${name}、&#123;&#123;name&#125;&#125;</span>
+        <textarea v-model="parameterJson" spellcheck="false" placeholder='{"userId": 42, "active": true}'></textarea>
+      </div>
+      <div class="ai-sql">
+        <input v-model="aiPrompt" maxlength="4000" placeholder="让 AI 生成、解释或改写当前 SQL" @keyup.enter="askAi" />
+        <button :disabled="aiRunning || !database || !aiPrompt.trim()" type="button" @click="askAi">{{ aiRunning ? "AI…" : "ASK AI" }}</button>
+      </div>
       <div class="query-actions">
-        <button :disabled="executing || !database || !sql.trim()" type="button" @click="execute">
-          {{ executing ? "正在执行…" : "执行查询  ▶" }}
+        <button :disabled="executing || !database || !sql.trim() || (executionMode === 'transaction' && !transactionId)" type="button" @click="execute">
+          {{ executing ? "正在执行…" : executionMode === "safe" ? "执行查询  ▶" : "执行所选模式  ▶" }}
         </button>
         <button
           v-if="executing"
@@ -709,7 +1108,22 @@ function autoFitColumns() {
       </div>
     </section>
     <div v-if="error" class="query-error"><b>!</b><span>{{ error }}</span></div>
+    <section v-if="explainResult" class="explain-panel">
+      <header><span>EXECUTION PLAN</span><button type="button" @click="explainResult = ''">×</button></header>
+      <pre>{{ explainResult }}</pre>
+    </section>
     <section v-if="result" class="result-panel">
+      <nav v-if="resultSets.length > 1" class="result-tabs" aria-label="多结果集">
+        <button
+          v-for="(item, index) in resultSets"
+          :key="index"
+          :class="{ active: activeResultIndex === index, error: item.execution_error }"
+          type="button"
+          @click="selectResultSet(index)"
+        >
+          #{{ (item.statement_index ?? index) + 1 }} · {{ item.execution_error ? "ERROR" : `${item.rows.length || item.affected_rows} ROWS` }}
+        </button>
+      </nav>
       <header>
         <div class="result-metrics">
           <span>
@@ -719,6 +1133,8 @@ function autoFitColumns() {
           <em v-if="result.has_more">MORE</em>
         </div>
         <div v-if="result.columns.length" class="result-actions">
+          <button v-if="pendingCellEdits.length" type="button" @click="buildPendingUpdateSql">EDIT {{ pendingCellEdits.length }}</button>
+          <button v-if="chartRows.length" type="button" @click="showChart = !showChart">{{ showChart ? "TABLE" : "CHART" }}</button>
           <button type="button" :disabled="exporting" @click="autoFitColumns">AUTO WIDTH</button>
           <select v-model="exportFormat" aria-label="查询结果导出格式">
             <option value="csv">CSV</option>
@@ -735,11 +1151,21 @@ function autoFitColumns() {
           >
             {{ exporting ? "PREPARING…" : "EXPORT ↗" }}
           </button>
+          <button v-if="executionMode === 'safe'" :disabled="fullExporting" type="button" @click="exportFullResult">
+            {{ fullExporting ? "FULL…" : "FULL CSV" }}
+          </button>
         </div>
       </header>
       <p v-if="exportStatus" class="export-status" aria-live="polite">{{ exportStatus }}</p>
-      <p v-if="result.columns.length" class="result-hint">点击单元格查看完整内容并复制；表头 − / + 可调整列宽。导出范围为当前服务端页。</p>
-      <div v-if="result.columns.length" class="result-scroll">
+      <div v-if="showChart && chartRows.length" class="query-chart">
+        <article v-for="(item, index) in chartRows" :key="index">
+          <span :title="item.label">{{ item.label }}</span>
+          <i><b :style="{ width: `${item.width}%` }"></b></i>
+          <strong>{{ item.value }}</strong>
+        </article>
+      </div>
+      <p v-if="result.columns.length" class="result-hint">点击单元格查看完整内容并复制；表头 − / + 可调整列宽。导出范围为当前结果页。</p>
+      <div v-if="result.columns.length && !showChart" class="result-scroll">
         <table>
           <colgroup>
             <col
@@ -798,9 +1224,20 @@ function autoFitColumns() {
           <button type="button" aria-label="关闭单元格详情" @click="selectedCell = null">×</button>
         </header>
         <pre :class="{ null: selectedCell.value === null }">{{ cellText(selectedCell.value) }}</pre>
+        <textarea
+          v-if="selectedTable && columns.some((column) => column.is_primary_key)"
+          v-model="cellEditValue"
+          class="cell-edit-input"
+          aria-label="编辑单元格值"
+        ></textarea>
         <footer>
           <button type="button" @click="copySelectedCell">复制单元格</button>
           <button type="button" @click="copySelectedRow">复制整行 TSV</button>
+          <button
+            v-if="selectedTable && columns.some((column) => column.is_primary_key)"
+            type="button"
+            @click="queueCellEdit"
+          >暂存修改</button>
         </footer>
       </section>
     </div>
@@ -817,8 +1254,29 @@ select { width: 100%; height: 42px; border: 1px solid var(--line); border-radius
 .editor-heading { display: grid; min-height: 38px; grid-template-columns: 1fr auto auto; align-items: center; gap: 9px; padding-left: 12px; color: var(--acid); font-size: 8px; letter-spacing: .12em; }
 .editor-heading small { color: var(--muted); font-size: 7px; letter-spacing: 0; }
 .editor-heading button { align-self: stretch; border: 0; border-left: 1px solid var(--line); background: rgba(199,255,61,.08); padding: 0 10px; color: var(--acid); font: inherit; font-size: 7px; letter-spacing: .1em; }
+.execution-modes { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); }
+.execution-modes button { min-height: 39px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font: inherit; font-size: 7px; }
+.execution-modes button.active { background: rgba(199,255,61,.12); color: var(--acid); }
+.advanced-guard { display: grid; gap: 9px; border-top: 1px solid rgba(255,184,77,.28); background: rgba(255,184,77,.055); padding: 11px; }
+.advanced-guard label { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 8px; line-height: 1.45; }
+.advanced-guard label span { display: inline; margin: 0; color: inherit; font-size: inherit; letter-spacing: 0; }
+.advanced-guard > input { min-height: 38px; border: 1px solid rgba(255,184,77,.35); background: #0d0e0c; padding: 0 9px; color: var(--ink); font: inherit; font-size: 9px; }
+.transaction-actions { display: flex; align-items: center; gap: 7px; }
+.transaction-actions b { margin-right: auto; color: var(--acid); font-size: 8px; }
+.transaction-actions button { min-height: 34px; border: 1px solid var(--line); background: rgba(199,255,61,.08); padding: 0 10px; color: var(--acid); font: inherit; font-size: 7px; }
+.transaction-actions button.danger { color: var(--danger); }
 .editor-input { position: relative; border-top: 1px solid var(--line); }
 textarea { display: block; width: 100%; min-height: 180px; resize: vertical; border: 0; outline: none; background: transparent; padding: 15px; color: #e7f5d1; font: 12px/1.65 "Azeret Mono Variable", monospace; }
+.editor-tools { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
+.editor-tools button, .file-action { display: grid; min-height: 38px; place-items: center; border: 0; border-right: 1px solid var(--line); background: rgba(255,255,255,.02); color: var(--muted); font: inherit; font-size: 7px; letter-spacing: .08em; }
+.file-action { position: relative; margin: 0; }
+.file-action input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.parameter-editor { border-top: 1px solid var(--line); }
+.parameter-editor > span { display: block; padding: 8px 11px; color: var(--muted); font-size: 7px; letter-spacing: .08em; }
+.parameter-editor textarea { min-height: 84px; border-top: 1px solid var(--line); font-size: 10px; }
+.ai-sql { display: grid; grid-template-columns: 1fr auto; border-top: 1px solid var(--line); }
+.ai-sql input { min-width: 0; min-height: 42px; border: 0; background: rgba(96,76,255,.05); padding: 0 11px; color: var(--ink); font: inherit; font-size: 9px; outline: none; }
+.ai-sql button { min-width: 82px; border: 0; border-left: 1px solid var(--line); background: rgba(96,76,255,.12); color: #b9aeff; font: inherit; font-size: 7px; }
 .suggestion-list { position: absolute; z-index: 4; right: 8px; bottom: 8px; left: 8px; overflow: auto; max-height: 190px; border: 1px solid rgba(199,255,61,.45); background: rgba(12,15,12,.98); box-shadow: 0 -16px 35px rgba(0,0,0,.55); }
 .suggestion-list button { display: grid; width: 100%; min-height: 40px; grid-template-columns: 25px minmax(0,1fr) auto; align-items: center; gap: 8px; border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 6px 9px; color: var(--ink); text-align: left; }
 .suggestion-list i { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid var(--line); color: var(--muted); font-size: 6px; font-style: normal; }
@@ -862,7 +1320,15 @@ button:disabled { opacity: .45; }
 .field-builder > button small { margin-top: 5px; color: var(--muted); font-size: 7px; }
 .field-builder > button b { position: absolute; top: 17px; right: 10px; color: var(--acid); font-size: 14px; font-weight: 400; }
 .query-error { display: flex; gap: 10px; border: 1px solid rgba(255,101,95,.35); padding: 13px; color: var(--danger); font-size: 10px; line-height: 1.5; }
+.explain-panel { overflow: hidden; border: 1px solid rgba(96,76,255,.4); background: #0b0b10; }
+.explain-panel header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); padding-left: 11px; color: #b9aeff; font-size: 8px; letter-spacing: .12em; }
+.explain-panel header button { width: 42px; height: 38px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); }
+.explain-panel pre { overflow: auto; max-height: 44vh; margin: 0; padding: 13px; color: var(--ink); font: 9px/1.6 "Azeret Mono Variable", monospace; white-space: pre-wrap; }
 .result-panel { border: 1px solid var(--line); background: var(--panel); }
+.result-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.result-tabs button { flex: 0 0 auto; min-height: 37px; border: 0; border-right: 1px solid var(--line); background: transparent; padding: 0 11px; color: var(--muted); font: inherit; font-size: 7px; }
+.result-tabs button.active { background: rgba(199,255,61,.1); color: var(--acid); }
+.result-tabs button.error { color: var(--danger); }
 .result-panel > header { display: grid; min-height: 46px; grid-template-columns: minmax(140px, 1fr) auto; border-bottom: 1px solid var(--line); color: var(--acid); font-size: 8px; letter-spacing: .1em; }
 .result-metrics { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 11px; }
 .result-panel em { color: var(--amber); font-style: normal; }
@@ -873,6 +1339,12 @@ button:disabled { opacity: .45; }
 .result-actions .export-action { background: linear-gradient(135deg, rgba(199,255,61,.16), rgba(199,255,61,.04)); font-weight: 720; }
 .export-action:active { background: var(--acid); color: #10130c; }
 .export-status { margin: 0; border-bottom: 1px solid var(--line); padding: 9px 11px; color: var(--muted); font-size: 8px; line-height: 1.5; overflow-wrap: anywhere; }
+.query-chart { display: grid; gap: 7px; padding: 12px; }
+.query-chart article { display: grid; grid-template-columns: minmax(70px, 28%) 1fr auto; align-items: center; gap: 8px; }
+.query-chart article > span { overflow: hidden; color: var(--muted); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.query-chart i { overflow: hidden; height: 12px; background: rgba(255,255,255,.05); }
+.query-chart i b { display: block; height: 100%; background: linear-gradient(90deg, var(--acid), #62d8a8); }
+.query-chart strong { color: var(--ink); font-size: 8px; }
 .result-panel .result-hint { margin: 0; border-bottom: 1px solid var(--line); padding: 8px 11px; color: var(--faint); font-size: 7px; line-height: 1.55; }
 .result-scroll { overflow: auto; max-height: 48vh; }
 table { table-layout: fixed; border-collapse: collapse; min-width: 100%; width: max-content; font-size: 9px; white-space: nowrap; }
@@ -898,7 +1370,8 @@ td.null { color: var(--faint); font-style: italic; }
 .cell-detail > header button { width: 58px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 24px; }
 .cell-detail pre { overflow: auto; max-height: calc(min(72vh, 560px) - 116px); min-height: 120px; margin: 0; padding: 16px; color: var(--ink); font: 11px/1.65 "Azeret Mono Variable", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cell-detail pre.null { color: var(--faint); font-style: italic; }
-.cell-detail > footer { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
+.cell-edit-input { min-height: 92px; max-height: 180px; border-top: 1px solid var(--line); background: rgba(199,255,61,.035); font-size: 10px; }
+.cell-detail > footer { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); border-top: 1px solid var(--line); }
 .cell-detail > footer button { min-height: 48px; border: 0; border-right: 1px solid var(--line); background: rgba(199,255,61,.07); color: var(--acid); font: inherit; font-size: 9px; }
 @media (max-width: 560px) {
   .result-panel > header { grid-template-columns: 1fr; }

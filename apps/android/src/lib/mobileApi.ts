@@ -1,4 +1,4 @@
-import { nativeAwareFetch } from "./nativeHttp";
+import { DIRECT_DATABASE_URL, directFetch, directJsonRequest } from "./directDatabase";
 
 export interface MobileLoginResponse {
   ok: boolean;
@@ -16,6 +16,7 @@ export interface MobileConnectionSummary {
   database: string | null;
   color: string | null;
   ssl: boolean;
+  sslMode: "required" | "verify-ca" | "verify-full";
   readOnly: boolean;
   isProduction: boolean;
   connectTimeoutSecs: number;
@@ -24,7 +25,74 @@ export interface MobileConnectionSummary {
   hasCaCertificate: boolean;
 }
 
-export type MobileDatabaseType = "mysql" | "postgres" | "sqlserver" | "mongodb" | "redis" | "clickhouse" | "sqlite" | "oracle";
+export type MobileDatabaseType =
+  | "mysql"
+  | "postgres"
+  | "sqlite"
+  | "rqlite"
+  | "turso"
+  | "cloudflare-d1"
+  | "redis"
+  | "duckdb"
+  | "clickhouse"
+  | "sqlserver"
+  | "mongodb"
+  | "oracle"
+  | "elasticsearch"
+  | "hbase"
+  | "qdrant"
+  | "milvus"
+  | "weaviate"
+  | "chromadb"
+  | "doris"
+  | "starrocks"
+  | "manticoresearch"
+  | "databend"
+  | "redshift"
+  | "dameng"
+  | "gaussdb"
+  | "kingbase"
+  | "highgo"
+  | "uxdb"
+  | "vastbase"
+  | "goldendb"
+  | "kwdb"
+  | "yashandb"
+  | "databricks"
+  | "saphana"
+  | "teradata"
+  | "vertica"
+  | "firebird"
+  | "exasol"
+  | "opengauss"
+  | "oceanbase-oracle"
+  | "questdb"
+  | "gbase"
+  | "access"
+  | "h2"
+  | "snowflake"
+  | "trino"
+  | "prestosql"
+  | "hive"
+  | "spark"
+  | "db2"
+  | "informix"
+  | "neo4j"
+  | "cassandra"
+  | "bigquery"
+  | "kylin"
+  | "sundb"
+  | "oscar"
+  | "tdengine"
+  | "xugu"
+  | "iotdb"
+  | "etcd"
+  | "zookeeper"
+  | "iris"
+  | "influxdb"
+  | "jdbc"
+  | "mq"
+  | "nacos";
 
 export interface MobileConnectionDraft {
   id?: string;
@@ -38,6 +106,7 @@ export interface MobileConnectionDraft {
   database: string | null;
   color: string | null;
   ssl: boolean;
+  sslMode: "required" | "verify-ca" | "verify-full";
   readOnly: boolean;
   isProduction: boolean;
   connectTimeoutSecs: number;
@@ -53,6 +122,34 @@ export interface MobileConnectionDraft {
   proxyPort: number;
   proxyUsername: string;
   proxyPassword: string;
+  sshEnabled: boolean;
+  sshHost: string;
+  sshPort: number;
+  sshUsername: string;
+  sshHostKeyFingerprint: string;
+  sshPassword: string;
+  sshAuthMethod: "password" | "private-key";
+  sshPrivateKey: string;
+  sshPrivateKeyPassphrase: string;
+  connectionString: string;
+  oracleConnectionType: "service_name" | "sid" | "tns";
+  sysdba: boolean;
+  urlParams: string;
+  initScript: string;
+  visibleDatabases: string[];
+  visibleSchemas: Record<string, string[]>;
+  productionDatabases: string[];
+  redisConnectionMode: "standalone" | "sentinel" | "cluster";
+  redisSentinelMaster: string;
+  redisSentinelNodes: string;
+  redisSentinelUsername: string;
+  redisSentinelPassword: string;
+  redisSentinelTls: boolean;
+  redisClusterNodes: string;
+  jdbcDriverClass: string;
+  jdbcDriverPaths: string[];
+  driverProfile: string;
+  driverLabel: string;
 }
 
 export interface MobileConnectionEditor extends MobileConnectionSummary {
@@ -69,6 +166,37 @@ export interface MobileConnectionEditor extends MobileConnectionSummary {
   proxyPort: number;
   proxyUsername: string;
   hasProxyPassword: boolean;
+  sshEnabled: boolean;
+  sshHost: string;
+  sshPort: number;
+  sshUsername: string;
+  sshHostKeyFingerprint: string;
+  hasSshPassword: boolean;
+  sshAuthMethod: "password" | "private-key";
+  hasSshPrivateKey: boolean;
+  hasSshPrivateKeyPassphrase: boolean;
+  connectionString: string;
+  hasConnectionString: boolean;
+  oracleConnectionType: "service_name" | "sid" | "tns";
+  sysdba: boolean;
+  urlParams: string;
+  initScript: string;
+  visibleDatabases: string[];
+  visibleSchemas: Record<string, string[]>;
+  productionDatabases: string[];
+  redisConnectionMode: "standalone" | "sentinel" | "cluster";
+  redisSentinelMaster: string;
+  redisSentinelNodes: string;
+  redisSentinelUsername: string;
+  hasRedisSentinelPassword: boolean;
+  redisSentinelTls: boolean;
+  redisClusterNodes: string;
+  jdbcDriverClass: string;
+  jdbcDriverPaths: string[];
+  driverProfile: string;
+  driverLabel: string;
+  tunnelLayerCount: number;
+  tunnelProfileCount: number;
 }
 
 export interface DatabaseInfo {
@@ -138,6 +266,62 @@ export interface TriggerInfo {
   statement?: string | null;
 }
 
+export interface PartitionInfo {
+  name: string;
+  position: number;
+  value: string;
+  partition_type: string;
+  partition_key: string;
+  online?: boolean | null;
+  auto_partition_type?: string | null;
+  auto_partition_span?: number | null;
+}
+
+export interface SubpartitionInfo {
+  name: string;
+  position: number;
+  value: string;
+  partition_type: string;
+  partition_key: string;
+}
+
+export interface SequenceInfo {
+  name: string;
+  data_type: string;
+  start_value: string;
+  min_value: string;
+  max_value: string;
+  increment: string;
+  cycle: boolean;
+  last_value?: string | null;
+}
+
+export interface RuleInfo {
+  name: string;
+  table_name: string;
+  definition: string;
+}
+
+export interface ExtensionInfo {
+  name: string;
+  version: string;
+  comment?: string | null;
+  schema?: string | null;
+}
+
+export interface OwnerInfo {
+  object_name: string;
+  object_type: string;
+  owner: string;
+}
+
+export interface ObjectStatistics {
+  name: string;
+  schema?: string | null;
+  estimated_rows?: number | null;
+  total_bytes?: number | null;
+}
+
 export interface DatabaseObjectInfo {
   name: string;
   object_type: string;
@@ -162,6 +346,15 @@ export interface QueryResult {
   execution_time_ms: number;
   truncated: boolean;
   has_more?: boolean;
+}
+
+export interface MobileMultiQueryResult extends QueryResult {
+  execution_error?: boolean;
+  statement_index?: number;
+}
+
+export interface MobileTransactionResponse {
+  transactionId: string;
 }
 
 export interface MongoCollectionInfo {
@@ -254,10 +447,23 @@ export interface MobileTableDataResponse {
   limit: number;
   hasMore: boolean;
   selectTemplate: string;
+  columnMeta: ColumnInfo[];
+  editable: boolean;
+  editBlockReason: string | null;
+  connectionName: string;
+  isProduction: boolean;
 }
 
 export interface MobileTableTemplateResponse {
   sql: string;
+}
+
+export interface MobileTableCellUpdateResponse {
+  affectedRows: number;
+}
+
+export interface MobileTableRowMutationResponse {
+  affectedRows: number;
 }
 
 export interface MobileQueryDraft {
@@ -269,6 +475,7 @@ export interface MobileQueryDraft {
   savedSqlId?: string;
   savedSqlName?: string;
   savedSqlFolderId?: string | null;
+  executionMode?: "safe" | "advanced" | "script" | "transaction";
 }
 
 export interface MobileHistoryEntry {
@@ -331,103 +538,28 @@ export class ApiError extends Error {
   }
 }
 
-export const API_REQUEST_TIMEOUT_MS = 8_000;
-
-export class ApiTimeoutError extends Error {
-  constructor() {
-    super("请求超时，请检查网络后重试");
-    this.name = "ApiTimeoutError";
+function requireDirectMode(baseUrl: string) {
+  if (baseUrl !== DIRECT_DATABASE_URL) {
+    throw new ApiError("Android 客户端仅支持本机数据库直连", 501);
   }
 }
 
-export async function withApiTimeout<T>(operation: (signal: AbortSignal) => Promise<T>, timeoutMs = API_REQUEST_TIMEOUT_MS): Promise<T> {
-  const controller = new AbortController();
-  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await operation(controller.signal);
-  } catch (error) {
-    if (controller.signal.aborted) throw new ApiTimeoutError();
-    throw error;
-  } finally {
-    globalThis.clearTimeout(timeout);
-  }
+export function apiFetch(baseUrl: string, path: string, _token: string | null, init: RequestInit = {}): Promise<Response> {
+  requireDirectMode(baseUrl);
+  return directFetch(path, init);
 }
 
-export function buildApiHeaders(token: string | null, initial?: HeadersInit): Headers {
-  const headers = new Headers(initial);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  return headers;
+export async function apiGetJson<T>(baseUrl: string, path: string, _token: string | null, params: Record<string, string | number | undefined>): Promise<T> {
+  requireDirectMode(baseUrl);
+  return directJsonRequest<T>({ method: "GET", path, params });
 }
 
-export function apiFetch(baseUrl: string, path: string, token: string | null, init: RequestInit = {}): Promise<Response> {
-  return nativeAwareFetch(baseUrl, `${baseUrl}${path}`, {
-    ...init,
-    headers: buildApiHeaders(token, init.headers),
-  });
+export async function apiPostJson<T>(baseUrl: string, path: string, _token: string | null, body: unknown, _options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+  requireDirectMode(baseUrl);
+  return directJsonRequest<T>({ method: "POST", path, body });
 }
 
-export function buildApiPath(path: string, params: Record<string, string | number | undefined>): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) query.set(key, String(value));
-  }
-  const encoded = query.toString();
-  return encoded ? `${path}?${encoded}` : path;
-}
-
-export async function apiGetJson<T>(baseUrl: string, path: string, token: string | null, params: Record<string, string | number | undefined>): Promise<T> {
-  return withApiTimeout(async (signal) => {
-    const response = await apiFetch(baseUrl, buildApiPath(path, params), token, {
-      headers: { Accept: "application/json" },
-      signal,
-    });
-    if (!response.ok) throw new ApiError(await apiErrorMessage(response), response.status);
-    return response.json() as Promise<T>;
-  });
-}
-
-async function apiErrorMessage(response: Response): Promise<string> {
-  const fallback = `服务器返回 ${response.status}`;
-  const text = await response.text().catch(() => "");
-  if (!text) return fallback;
-  try {
-    const payload = JSON.parse(text) as { message?: string; error?: string };
-    return payload.message ?? payload.error ?? fallback;
-  } catch {
-    return text;
-  }
-}
-
-export async function apiPostJson<T>(baseUrl: string, path: string, token: string | null, body: unknown, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  options.signal?.addEventListener("abort", abort, { once: true });
-  const timeout = window.setTimeout(abort, options.timeoutMs ?? 35_000);
-  try {
-    const response = await apiFetch(baseUrl, path, token, {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new ApiError(await apiErrorMessage(response), response.status);
-    }
-    return response.json() as Promise<T>;
-  } finally {
-    window.clearTimeout(timeout);
-    options.signal?.removeEventListener("abort", abort);
-  }
-}
-
-export async function apiDeleteJson<T>(baseUrl: string, path: string, token: string | null): Promise<T> {
-  return withApiTimeout(async (signal) => {
-    const response = await apiFetch(baseUrl, path, token, {
-      method: "DELETE",
-      headers: { Accept: "application/json" },
-      signal,
-    });
-    if (!response.ok) throw new ApiError(await apiErrorMessage(response), response.status);
-    return response.json() as Promise<T>;
-  });
+export async function apiDeleteJson<T>(baseUrl: string, path: string, _token: string | null): Promise<T> {
+  requireDirectMode(baseUrl);
+  return directJsonRequest<T>({ method: "DELETE", path });
 }

@@ -522,7 +522,8 @@ async function removeFolder(item: SavedSqlFolder) {
 }
 
 async function removeSaved(item: SavedSqlFile) {
-  if (!window.confirm(`删除“${item.name}”？此操作会同步到 DBX Server。`)) return;
+  const target = "本机 SQL 库";
+  if (!window.confirm(`从${target}删除“${item.name}”？`)) return;
   busyId.value = item.id;
   error.value = "";
   try {
@@ -598,7 +599,7 @@ onBeforeUnmount(() => {
     </section>
 
     <div v-if="error" class="module-error">{{ error }} <button type="button" @click="load">重试</button></div>
-    <div v-if="loading" class="empty">正在同步 DBX Server…</div>
+    <div v-if="loading" class="empty">正在读取本机 SQL 库…</div>
     <div v-else-if="mode === 'history'" class="entry-list">
       <div class="list-toolbar">
         <span>已加载 {{ history.length }} / {{ total }}</span>

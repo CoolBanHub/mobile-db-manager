@@ -15,14 +15,21 @@ import {
   type MobileQueryDraft,
   type MobileTableTarget,
   type MobileTableTemplateResponse,
+  type ObjectStatistics,
   type ObjectSource,
+  type OwnerInfo,
+  type PartitionInfo,
+  type RuleInfo,
+  type SequenceInfo,
+  type SubpartitionInfo,
+  type ExtensionInfo,
   type TableInfo,
   type TriggerInfo,
 } from "../lib/mobileApi";
 
 type BrowseLevel = "connections" | "databases" | "schemas" | "tables" | "details" | "routine" | "data";
-type SchemaSection = "relations" | "routines";
-type DetailTab = "columns" | "indexes" | "foreignKeys" | "constraints" | "triggers" | "definition";
+type SchemaSection = "relations" | "routines" | "sequences" | "rules" | "extensions" | "statistics" | "owners";
+type DetailTab = "columns" | "indexes" | "foreignKeys" | "constraints" | "triggers" | "partitions" | "subpartitions" | "definition";
 
 const props = defineProps<{
   baseUrl: string;
@@ -51,6 +58,14 @@ const indexes = ref<IndexInfo[]>([]);
 const foreignKeys = ref<ForeignKeyInfo[]>([]);
 const constraints = ref<ConstraintInfo[]>([]);
 const triggers = ref<TriggerInfo[]>([]);
+const partitions = ref<PartitionInfo[]>([]);
+const subpartitions = ref<SubpartitionInfo[]>([]);
+const sequences = ref<SequenceInfo[]>([]);
+const rules = ref<RuleInfo[]>([]);
+const extensions = ref<ExtensionInfo[]>([]);
+const statistics = ref<ObjectStatistics[]>([]);
+const owners = ref<OwnerInfo[]>([]);
+const schemaCollectionsLoaded = ref<Partial<Record<SchemaSection, boolean>>>({});
 const definition = ref("");
 const routineSource = ref<ObjectSource | null>(null);
 const selectedRoutine = ref<DatabaseObjectInfo | null>(null);
@@ -65,6 +80,9 @@ const errorMessage = ref("");
 const hasMoreTables = ref(false);
 const tableTarget = ref<MobileTableTarget | null>(null);
 const actionTable = ref("");
+const objectSearch = ref("");
+const objectSearchResults = ref<DatabaseObjectInfo[]>([]);
+const objectSearching = ref(false);
 let retryAction: (() => Promise<void>) | null = null;
 let tableActionRequestId = 0;
 let detailRequestId = 0;
@@ -126,10 +144,13 @@ async function openConnection(connection: MobileConnectionSummary) {
   tables.value = [];
   routines.value = [];
   routinesLoaded.value = false;
+  objectSearch.value = "";
+  objectSearchResults.value = [];
+  schemaCollectionsLoaded.value = {};
   columns.value = [];
   level.value = "databases";
   await runLoad(async () => {
-    databases.value = await apiGetJson<DatabaseInfo[]>(props.baseUrl, "/api/schema/databases", props.token, { connection_id: connection.id });
+    databases.value = await apiGetJson<DatabaseInfo[]>(props.baseUrl, "/api/mobile/schema/databases", props.token, { connection_id: connection.id });
   });
 }
 
@@ -143,13 +164,16 @@ async function openDatabase(database: DatabaseInfo) {
   tables.value = [];
   routines.value = [];
   routinesLoaded.value = false;
+  objectSearch.value = "";
+  objectSearchResults.value = [];
+  schemaCollectionsLoaded.value = {};
   columns.value = [];
   schemaSection.value = "relations";
   level.value = "schemas";
 
   const connectionId = selectedConnection.value.id;
   await runLoad(async () => {
-    schemas.value = await apiGetJson<string[]>(props.baseUrl, "/api/schema/schemas", props.token, {
+    schemas.value = await apiGetJson<string[]>(props.baseUrl, "/api/mobile/schema/schemas", props.token, {
       connection_id: connectionId,
       database: database.name,
       apply_visible_filter: "true",
@@ -169,6 +193,9 @@ async function openSchema(schema: string) {
   tables.value = [];
   routines.value = [];
   routinesLoaded.value = false;
+  objectSearch.value = "";
+  objectSearchResults.value = [];
+  schemaCollectionsLoaded.value = {};
   columns.value = [];
   schemaSection.value = "relations";
   level.value = "tables";
@@ -177,7 +204,7 @@ async function openSchema(schema: string) {
 }
 
 async function fetchTables(connectionId: string, database: string, schema: string, offset: number) {
-  const page = await apiGetJson<TableInfo[]>(props.baseUrl, "/api/schema/tables", props.token, {
+  const page = await apiGetJson<TableInfo[]>(props.baseUrl, "/api/mobile/schema/tables", props.token, {
     connection_id: connectionId,
     database,
     schema,
@@ -190,7 +217,7 @@ async function fetchTables(connectionId: string, database: string, schema: strin
 
 async function fetchRoutines() {
   if (!selectedConnection.value || routinesLoaded.value) return;
-  routines.value = await apiGetJson<DatabaseObjectInfo[]>(props.baseUrl, "/api/schema/objects", props.token, {
+  routines.value = await apiGetJson<DatabaseObjectInfo[]>(props.baseUrl, "/api/mobile/schema/objects", props.token, {
     connection_id: selectedConnection.value.id,
     database: selectedDatabase.value,
     schema: selectedSchema.value,
@@ -201,11 +228,81 @@ async function fetchRoutines() {
   routinesLoaded.value = true;
 }
 
+async function searchDatabaseObjects() {
+  if (!selectedConnection.value || !objectSearch.value.trim()) {
+    objectSearchResults.value = [];
+    return;
+  }
+  objectSearching.value = true;
+  errorMessage.value = "";
+  try {
+    objectSearchResults.value = await apiGetJson<DatabaseObjectInfo[]>(
+      props.baseUrl,
+      "/api/mobile/schema/objects",
+      props.token,
+      {
+        connection_id: selectedConnection.value.id,
+        database: selectedDatabase.value,
+        schema: "",
+        filter: objectSearch.value.trim(),
+        limit: 200,
+        offset: 0,
+      },
+    );
+  } catch (error) {
+    handleError(error, searchDatabaseObjects);
+  } finally {
+    objectSearching.value = false;
+  }
+}
+
+function openSearchedObject(item: DatabaseObjectInfo) {
+  const type = item.object_type.toUpperCase();
+  if (type.includes("FUNCTION") || type.includes("PROCEDURE")) {
+    selectedSchema.value = item.schema || selectedSchema.value;
+    void openRoutine(item);
+    return;
+  }
+  const table = tables.value.find(
+    (candidate) => candidate.name === item.name && (!item.schema || candidate.parent_schema === item.schema),
+  );
+  if (table) {
+    selectedSchema.value = item.schema || selectedSchema.value;
+    void openTable(table);
+    return;
+  }
+  selectedSchema.value = item.schema || selectedSchema.value;
+  openManagementSql(`SELECT * FROM ${qualifiedObject(item.name)} LIMIT 100;`);
+}
+
 async function selectSchemaSection(section: SchemaSection) {
   schemaSection.value = section;
   errorMessage.value = "";
   if (section === "routines" && !routinesLoaded.value) {
     await runLoad(fetchRoutines);
+  } else if (!["relations", "routines"].includes(section) && !schemaCollectionsLoaded.value[section]) {
+    await runLoad(async () => {
+      const params = {
+        connection_id: selectedConnection.value?.id ?? "",
+        database: selectedDatabase.value,
+        schema: selectedSchema.value,
+      };
+      if (section === "sequences") {
+        sequences.value = await apiGetJson<SequenceInfo[]>(props.baseUrl, "/api/mobile/schema/sequences", props.token, {
+          ...params,
+          with_last_values: "true",
+        });
+      } else if (section === "rules") {
+        rules.value = await apiGetJson<RuleInfo[]>(props.baseUrl, "/api/mobile/schema/rules", props.token, params);
+      } else if (section === "extensions") {
+        extensions.value = await apiGetJson<ExtensionInfo[]>(props.baseUrl, "/api/mobile/schema/extensions", props.token, params);
+      } else if (section === "statistics") {
+        statistics.value = await apiGetJson<ObjectStatistics[]>(props.baseUrl, "/api/mobile/schema/object-statistics", props.token, params);
+      } else if (section === "owners") {
+        owners.value = await apiGetJson<OwnerInfo[]>(props.baseUrl, "/api/mobile/schema/owners", props.token, params);
+      }
+      schemaCollectionsLoaded.value = { ...schemaCollectionsLoaded.value, [section]: true };
+    });
   }
 }
 
@@ -233,6 +330,8 @@ async function openTable(table: TableInfo) {
   foreignKeys.value = [];
   constraints.value = [];
   triggers.value = [];
+  partitions.value = [];
+  subpartitions.value = [];
   definition.value = "";
   detailLoaded.value = {};
   detailTab.value = "columns";
@@ -265,18 +364,22 @@ async function loadDetail(tab: DetailTab) {
   try {
     const params = detailParams();
     if (tab === "columns") {
-      columns.value = await apiGetJson<ColumnInfo[]>(props.baseUrl, "/api/schema/columns", props.token, params);
+      columns.value = await apiGetJson<ColumnInfo[]>(props.baseUrl, "/api/mobile/schema/columns", props.token, params);
     } else if (tab === "indexes") {
-      indexes.value = await apiGetJson<IndexInfo[]>(props.baseUrl, "/api/schema/indexes", props.token, params);
+      indexes.value = await apiGetJson<IndexInfo[]>(props.baseUrl, "/api/mobile/schema/indexes", props.token, params);
     } else if (tab === "foreignKeys") {
-      foreignKeys.value = await apiGetJson<ForeignKeyInfo[]>(props.baseUrl, "/api/schema/foreign-keys", props.token, params);
+      foreignKeys.value = await apiGetJson<ForeignKeyInfo[]>(props.baseUrl, "/api/mobile/schema/foreign-keys", props.token, params);
     } else if (tab === "constraints") {
-      constraints.value = await apiGetJson<ConstraintInfo[]>(props.baseUrl, "/api/schema/constraints", props.token, params);
+      constraints.value = await apiGetJson<ConstraintInfo[]>(props.baseUrl, "/api/mobile/schema/constraints", props.token, params);
     } else if (tab === "triggers") {
-      triggers.value = await apiGetJson<TriggerInfo[]>(props.baseUrl, "/api/schema/triggers", props.token, params);
+      triggers.value = await apiGetJson<TriggerInfo[]>(props.baseUrl, "/api/mobile/schema/triggers", props.token, params);
+    } else if (tab === "partitions") {
+      partitions.value = await apiGetJson<PartitionInfo[]>(props.baseUrl, "/api/mobile/schema/partitions", props.token, params);
+    } else if (tab === "subpartitions") {
+      subpartitions.value = await apiGetJson<SubpartitionInfo[]>(props.baseUrl, "/api/mobile/schema/subpartitions", props.token, params);
     } else {
       const upperType = selectedTable.value.table_type.toUpperCase();
-      definition.value = await apiGetJson<string>(props.baseUrl, "/api/schema/ddl", props.token, {
+      definition.value = await apiGetJson<string>(props.baseUrl, "/api/mobile/schema/ddl", props.token, {
         ...params,
         object_type: upperType.includes("MATERIALIZED") ? "MATERIALIZED_VIEW" : upperType.includes("VIEW") ? "VIEW" : undefined,
       });
@@ -298,7 +401,7 @@ async function openRoutine(routine: DatabaseObjectInfo) {
   routineSource.value = null;
   level.value = "routine";
   await runLoad(async () => {
-    routineSource.value = await apiGetJson<ObjectSource>(props.baseUrl, "/api/schema/object-source", props.token, {
+    routineSource.value = await apiGetJson<ObjectSource>(props.baseUrl, "/api/mobile/schema/object-source", props.token, {
       connection_id: selectedConnection.value?.id,
       database: selectedDatabase.value,
       schema: routine.schema || selectedSchema.value,
@@ -317,6 +420,170 @@ function mobileTarget(table: TableInfo): MobileTableTarget | null {
     schema: selectedSchema.value || null,
     table: table.name,
   };
+}
+
+function quoteIdentifier(value: string) {
+  const dbType = selectedConnection.value?.dbType;
+  if (["mysql", "clickhouse", "doris", "starrocks"].includes(dbType ?? "")) {
+    return `\`${value.replaceAll("`", "``")}\``;
+  }
+  if (dbType === "sqlserver") return `[${value.replaceAll("]", "]]")}]`;
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function qualifiedObject(name: string) {
+  return selectedSchema.value
+    ? `${quoteIdentifier(selectedSchema.value)}.${quoteIdentifier(name)}`
+    : quoteIdentifier(name);
+}
+
+function openManagementSql(sql: string) {
+  if (!selectedConnection.value) return;
+  emit("openQuery", {
+    connectionId: selectedConnection.value.id,
+    database: selectedDatabase.value || selectedConnection.value.database || databases.value[0]?.name || "",
+    schema: selectedSchema.value || null,
+    sql,
+    executionMode: "advanced",
+  });
+}
+
+function createDatabaseSql() {
+  const name = window.prompt("新数据库名称");
+  if (name?.trim()) openManagementSql(`CREATE DATABASE ${quoteIdentifier(name.trim())};`);
+}
+
+function dropDatabaseSql(database: DatabaseInfo) {
+  openManagementSql(`DROP DATABASE ${quoteIdentifier(database.name)};`);
+}
+
+function createSchemaSql() {
+  const name = window.prompt("新 Schema 名称");
+  if (name?.trim()) openManagementSql(`CREATE SCHEMA ${quoteIdentifier(name.trim())};`);
+}
+
+function renameSchemaSql() {
+  const nextName = window.prompt("Schema 重命名为", selectedSchema.value);
+  if (nextName?.trim() && nextName.trim() !== selectedSchema.value) {
+    openManagementSql(`ALTER SCHEMA ${quoteIdentifier(selectedSchema.value)} RENAME TO ${quoteIdentifier(nextName.trim())};`);
+  }
+}
+
+function dropSchemaSql() {
+  if (selectedSchema.value) openManagementSql(`DROP SCHEMA ${quoteIdentifier(selectedSchema.value)};`);
+}
+
+function createRelationSql(kind: "table" | "view") {
+  const name = window.prompt(kind === "table" ? "新表名称" : "新视图名称");
+  if (!name?.trim()) return;
+  const target = qualifiedObject(name.trim());
+  openManagementSql(
+    kind === "table"
+      ? `CREATE TABLE ${target} (\n  id INTEGER PRIMARY KEY\n);`
+      : `CREATE VIEW ${target} AS\nSELECT 1 AS value;`,
+  );
+}
+
+function renameRelationSql(table: TableInfo) {
+  const nextName = window.prompt("重命名为", table.name);
+  if (!nextName?.trim() || nextName.trim() === table.name) return;
+  openManagementSql(`ALTER ${table.table_type.toUpperCase().includes("VIEW") ? "VIEW" : "TABLE"} ${qualifiedObject(table.name)} RENAME TO ${quoteIdentifier(nextName.trim())};`);
+}
+
+function dropRelationSql(table: TableInfo) {
+  const objectType = table.table_type.toUpperCase().includes("VIEW") ? "VIEW" : "TABLE";
+  openManagementSql(`DROP ${objectType} ${qualifiedObject(table.name)};`);
+}
+
+function alterTableSql(table: TableInfo) {
+  openManagementSql(`-- 在执行前补全表结构变更\nALTER TABLE ${qualifiedObject(table.name)}\n  ADD COLUMN new_column VARCHAR(255);`);
+}
+
+function addIndexSql(table: TableInfo) {
+  const column = window.prompt("索引字段（多个字段用逗号分隔）");
+  if (!column?.trim()) return;
+  const indexName = window.prompt("索引名称", `idx_${table.name}_${column.split(",")[0].trim()}`);
+  if (!indexName?.trim()) return;
+  const columnsSql = column
+    .split(",")
+    .map((item) => quoteIdentifier(item.trim()))
+    .filter(Boolean)
+    .join(", ");
+  openManagementSql(`CREATE INDEX ${quoteIdentifier(indexName.trim())} ON ${qualifiedObject(table.name)} (${columnsSql});`);
+}
+
+function addForeignKeySql(table: TableInfo) {
+  const column = window.prompt("本表外键字段");
+  const reference = window.prompt("引用对象，格式 schema.table(column)");
+  if (!column?.trim() || !reference?.trim()) return;
+  const constraintName = window.prompt("外键约束名称", `fk_${table.name}_${column.trim()}`);
+  if (!constraintName?.trim()) return;
+  openManagementSql(
+    `ALTER TABLE ${qualifiedObject(table.name)}\n  ADD CONSTRAINT ${quoteIdentifier(constraintName.trim())} FOREIGN KEY (${quoteIdentifier(column.trim())})\n  REFERENCES ${reference.trim()};`,
+  );
+}
+
+function dropColumnSql(column: ColumnInfo) {
+  if (!selectedTable.value) return;
+  openManagementSql(
+    `ALTER TABLE ${qualifiedObject(selectedTable.value.name)} DROP COLUMN ${quoteIdentifier(column.name)};`,
+  );
+}
+
+function dropIndexSql(index: IndexInfo) {
+  if (!selectedTable.value) return;
+  const dbType = selectedConnection.value?.dbType;
+  openManagementSql(
+    dbType === "mysql"
+      ? `DROP INDEX ${quoteIdentifier(index.name)} ON ${qualifiedObject(selectedTable.value.name)};`
+      : `DROP INDEX ${selectedSchema.value ? `${quoteIdentifier(selectedSchema.value)}.` : ""}${quoteIdentifier(index.name)};`,
+  );
+}
+
+function dropConstraintSql(name: string) {
+  if (!selectedTable.value) return;
+  openManagementSql(
+    `ALTER TABLE ${qualifiedObject(selectedTable.value.name)} DROP CONSTRAINT ${quoteIdentifier(name)};`,
+  );
+}
+
+function openAdministrationSql(kind: "users" | "sessions" | "monitor") {
+  const dbType = selectedConnection.value?.dbType;
+  const sqlByDatabase: Record<string, Record<typeof kind, string>> = {
+    postgres: {
+      users: "SELECT rolname, rolsuper, rolcanlogin, rolconnlimit FROM pg_roles ORDER BY rolname;",
+      sessions: "SELECT pid, usename, datname, client_addr, state, query_start, query FROM pg_stat_activity ORDER BY query_start DESC;",
+      monitor: "SELECT datname, numbackends, xact_commit, xact_rollback, blks_read, blks_hit, deadlocks FROM pg_stat_database ORDER BY datname;",
+    },
+    mysql: {
+      users: "SELECT User, Host, account_locked, password_expired FROM mysql.user ORDER BY User, Host;",
+      sessions: "SHOW FULL PROCESSLIST;",
+      monitor: "SHOW GLOBAL STATUS;",
+    },
+    sqlserver: {
+      users: "SELECT name, type_desc, is_disabled, create_date FROM sys.server_principals ORDER BY name;",
+      sessions: "SELECT session_id, login_name, host_name, status, cpu_time, memory_usage, reads, writes FROM sys.dm_exec_sessions WHERE is_user_process = 1;",
+      monitor: "SELECT * FROM sys.dm_os_performance_counters;",
+    },
+    oracle: {
+      users: "SELECT username, account_status, created, profile FROM all_users ORDER BY username;",
+      sessions: "SELECT sid, serial#, username, status, machine, program, sql_id FROM v$session WHERE type = 'USER';",
+      monitor: "SELECT name, value FROM v$sysstat ORDER BY name;",
+    },
+  };
+  const sql = sqlByDatabase[dbType ?? ""]?.[kind];
+  if (sql) openManagementSql(sql);
+  else errorMessage.value = "当前数据库类型暂无内置运维查询模板";
+}
+
+function executeRoutineSql(routine: DatabaseObjectInfo) {
+  const target = qualifiedObject(routine.name);
+  openManagementSql(routine.object_type === "PROCEDURE" ? `CALL ${target}();` : `SELECT ${target}();`);
+}
+
+function editRoutineSql() {
+  if (!routineSource.value?.source) return;
+  openManagementSql(routineSource.value.source);
 }
 
 function openTableData(table: TableInfo) {
@@ -406,7 +673,7 @@ onBeforeUnmount(() => {
       <div v-if="loading" class="browser-state">
         <i class="loader" aria-hidden="true"></i>
         <strong>正在读取 {{ title }}</strong>
-        <p>请求由 DBX Server 执行，数据库凭据不会进入手机。</p>
+        <p>请求由 Android 原生驱动直接执行，数据库凭据只保存在本机加密仓库。</p>
       </div>
 
       <div v-else-if="errorMessage" class="browser-state error">
@@ -431,16 +698,20 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="level === 'databases'" class="browser-list">
-          <button v-for="database in databases" :key="database.name" class="browser-row" type="button" @click="openDatabase(database)">
-            <span class="object-icon">DB</span
-            ><span
-              ><small>DATABASE</small><strong>{{ database.name }}</strong></span
-            ><b>›</b>
-          </button>
+          <button class="management-action" type="button" @click="createDatabaseSql">＋ 创建数据库 SQL</button>
+          <article v-for="database in databases" :key="database.name" class="table-row">
+            <button class="browser-row" type="button" @click="openDatabase(database)">
+              <span class="object-icon">DB</span
+              ><span><small>DATABASE</small><strong>{{ database.name }}</strong></span
+              ><b>›</b>
+            </button>
+            <div class="table-actions"><button class="danger" type="button" @click="dropDatabaseSql(database)">生成删除 SQL</button></div>
+          </article>
           <div v-if="databases.length === 0" class="browser-state"><strong>没有可见数据库</strong></div>
         </div>
 
         <div v-else-if="level === 'schemas'" class="browser-list">
+          <button class="management-action" type="button" @click="createSchemaSql">＋ 创建 Schema SQL</button>
           <button v-for="schema in schemas" :key="schema" class="browser-row" type="button" @click="openSchema(schema)">
             <span class="object-icon">SC</span
             ><span
@@ -451,6 +722,35 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="level === 'tables'" class="schema-objects">
+          <div class="schema-management-actions">
+            <button type="button" @click="createRelationSql('table')">＋ TABLE</button>
+            <button type="button" @click="createRelationSql('view')">＋ VIEW</button>
+            <button type="button" @click="renameSchemaSql">RENAME SCHEMA</button>
+            <button class="danger" type="button" @click="dropSchemaSql">DROP SCHEMA SQL</button>
+          </div>
+          <form class="object-search" @submit.prevent="searchDatabaseObjects">
+            <input v-model="objectSearch" type="search" placeholder="跨 Schema 搜索对象名称" />
+            <button :disabled="objectSearching || !objectSearch.trim()" type="submit">
+              {{ objectSearching ? "搜索中" : "全局搜索" }}
+            </button>
+          </form>
+          <div v-if="objectSearchResults.length" class="search-results">
+            <button
+              v-for="item in objectSearchResults"
+              :key="`${item.schema || ''}:${item.object_type}:${item.name}:${item.signature || ''}`"
+              type="button"
+              @click="openSearchedObject(item)"
+            >
+              <small>{{ item.object_type }} · {{ item.schema || "DEFAULT" }}</small>
+              <strong>{{ item.name }}</strong>
+            </button>
+          </div>
+          <div class="administration-actions">
+            <span>数据库运维</span>
+            <button type="button" @click="openAdministrationSql('users')">用户</button>
+            <button type="button" @click="openAdministrationSql('sessions')">会话 / 进程</button>
+            <button type="button" @click="openAdministrationSql('monitor')">监控指标</button>
+          </div>
           <div class="object-tabs">
             <button :class="{ active: schemaSection === 'relations' }" type="button" @click="selectSchemaSection('relations')">
               表 / 视图 <b>{{ tables.length }}</b>
@@ -458,6 +758,11 @@ onBeforeUnmount(() => {
             <button :class="{ active: schemaSection === 'routines' }" type="button" @click="selectSchemaSection('routines')">
               函数 / 过程 <b>{{ routinesLoaded ? routines.length : "—" }}</b>
             </button>
+            <button :class="{ active: schemaSection === 'sequences' }" type="button" @click="selectSchemaSection('sequences')">序列</button>
+            <button :class="{ active: schemaSection === 'rules' }" type="button" @click="selectSchemaSection('rules')">规则</button>
+            <button :class="{ active: schemaSection === 'extensions' }" type="button" @click="selectSchemaSection('extensions')">扩展</button>
+            <button :class="{ active: schemaSection === 'statistics' }" type="button" @click="selectSchemaSection('statistics')">统计</button>
+            <button :class="{ active: schemaSection === 'owners' }" type="button" @click="selectSchemaSection('owners')">Owner</button>
           </div>
           <div v-if="schemaSection === 'relations'" class="browser-list">
             <article v-for="table in tables" :key="`${table.parent_schema || ''}:${table.name}`" class="table-row">
@@ -474,6 +779,8 @@ onBeforeUnmount(() => {
                 <button :disabled="!supportsTableBrowsing || !!actionTable" type="button" @click="openTableQuery(table)">
                   {{ actionTable === table.name ? "生成中" : "SELECT ↗" }}
                 </button>
+                <button type="button" @click="renameRelationSql(table)">重命名</button>
+                <button class="danger" type="button" @click="dropRelationSql(table)">删除 SQL</button>
               </div>
             </article>
             <div v-if="tables.length === 0" class="browser-state"><strong>没有可见表或视图</strong></div>
@@ -482,7 +789,7 @@ onBeforeUnmount(() => {
               {{ loadingMore ? "正在加载" : `继续加载（已显示 ${tables.length}）` }}
             </button>
           </div>
-          <div v-else class="browser-list">
+          <div v-else-if="schemaSection === 'routines'" class="browser-list">
             <button v-for="routine in routines" :key="`${routine.object_type}:${routine.name}:${routine.signature || ''}`" class="browser-row" type="button" @click="openRoutine(routine)">
               <span class="object-icon">{{ routine.object_type === "PROCEDURE" ? "PR" : "FN" }}</span>
               <span>
@@ -494,6 +801,43 @@ onBeforeUnmount(() => {
             </button>
             <div v-if="routines.length === 0" class="browser-state"><strong>没有可见函数或存储过程</strong></div>
           </div>
+          <div v-else-if="schemaSection === 'sequences'" class="browser-list">
+            <article v-for="item in sequences" :key="item.name" class="metadata-card">
+              <header><strong>{{ item.name }}</strong><span><em>{{ item.data_type }}</em></span></header>
+              <code>START {{ item.start_value }} · INCREMENT {{ item.increment }}</code>
+              <p>MIN {{ item.min_value }} · MAX {{ item.max_value }} · {{ item.cycle ? "CYCLE" : "NO CYCLE" }}</p>
+              <p v-if="item.last_value != null">LAST VALUE {{ item.last_value }}</p>
+            </article>
+            <div v-if="sequences.length === 0" class="browser-state"><strong>当前数据库不支持序列或没有可见序列</strong></div>
+          </div>
+          <div v-else-if="schemaSection === 'rules'" class="browser-list">
+            <article v-for="item in rules" :key="item.name" class="metadata-card">
+              <header><strong>{{ item.name }}</strong><span><em>{{ item.table_name }}</em></span></header>
+              <pre>{{ item.definition }}</pre>
+            </article>
+            <div v-if="rules.length === 0" class="browser-state"><strong>当前数据库不支持规则或没有可见规则</strong></div>
+          </div>
+          <div v-else-if="schemaSection === 'extensions'" class="browser-list">
+            <article v-for="item in extensions" :key="item.name" class="metadata-card">
+              <header><strong>{{ item.name }}</strong><span><em>{{ item.version }}</em></span></header>
+              <code v-if="item.schema">{{ item.schema }}</code><p v-if="item.comment">{{ item.comment }}</p>
+            </article>
+            <div v-if="extensions.length === 0" class="browser-state"><strong>当前数据库不支持扩展或没有已安装扩展</strong></div>
+          </div>
+          <div v-else-if="schemaSection === 'statistics'" class="browser-list">
+            <article v-for="item in statistics" :key="`${item.schema || ''}:${item.name}`" class="metadata-card">
+              <header><strong>{{ item.name }}</strong><span><em>{{ item.schema || selectedSchema }}</em></span></header>
+              <code>{{ item.estimated_rows ?? "—" }} ROWS</code><p>{{ item.total_bytes == null ? "大小未知" : `${item.total_bytes.toLocaleString()} BYTES` }}</p>
+            </article>
+            <div v-if="statistics.length === 0" class="browser-state"><strong>没有可见对象统计</strong></div>
+          </div>
+          <div v-else class="browser-list">
+            <article v-for="item in owners" :key="`${item.object_type}:${item.object_name}`" class="metadata-card">
+              <header><strong>{{ item.object_name }}</strong><span><em>{{ item.object_type }}</em></span></header>
+              <code>OWNER {{ item.owner }}</code>
+            </article>
+            <div v-if="owners.length === 0" class="browser-state"><strong>没有可见 Owner 信息</strong></div>
+          </div>
         </div>
 
         <div v-else-if="level === 'routine'" class="source-view">
@@ -501,6 +845,10 @@ onBeforeUnmount(() => {
             <span>{{ selectedRoutine?.object_type }}</span>
             <strong>{{ selectedRoutine?.name }}</strong>
             <small>{{ selectedRoutine?.signature }}</small>
+          </div>
+          <div v-if="selectedRoutine" class="routine-actions">
+            <button type="button" @click="executeRoutineSql(selectedRoutine)">生成执行 SQL</button>
+            <button :disabled="!routineSource?.source" type="button" @click="editRoutineSql">在高级工作台编辑源码</button>
           </div>
           <pre>{{ routineSource?.source || "没有可见定义" }}</pre>
         </div>
@@ -511,6 +859,9 @@ onBeforeUnmount(() => {
             <button :disabled="!supportsTableBrowsing || !!actionTable" type="button" @click="openTableQuery(selectedTable)">
               {{ actionTable ? "正在生成" : "在查询工作台打开 ↗" }}
             </button>
+            <button v-if="!selectedTable.table_type.toUpperCase().includes('VIEW')" type="button" @click="alterTableSql(selectedTable)">结构设计 SQL</button>
+            <button v-if="!selectedTable.table_type.toUpperCase().includes('VIEW')" type="button" @click="addIndexSql(selectedTable)">新增索引 SQL</button>
+            <button v-if="!selectedTable.table_type.toUpperCase().includes('VIEW')" type="button" @click="addForeignKeySql(selectedTable)">新增外键 SQL</button>
           </div>
           <div class="detail-tabs">
             <button
@@ -520,6 +871,8 @@ onBeforeUnmount(() => {
                 ['foreignKeys', '外键'],
                 ['constraints', '约束'],
                 ['triggers', '触发器'],
+                ['partitions', '分区'],
+                ['subpartitions', '子分区'],
                 ['definition', selectedTable?.table_type.toUpperCase().includes('VIEW') ? '视图定义' : 'DDL'],
               ] as [DetailTab, string][]"
               :key="tab[0]"
@@ -547,6 +900,7 @@ onBeforeUnmount(() => {
                 {{ column.is_nullable ? "可为空" : "非空" }}<template v-if="column.column_default"> · 默认 {{ column.column_default }}</template>
               </p>
               <small v-if="column.comment">{{ column.comment }}</small>
+              <button v-if="selectedTable && !selectedTable.table_type.toUpperCase().includes('VIEW')" class="inline-danger" type="button" @click="dropColumnSql(column)">删除字段 SQL</button>
             </article>
             <div v-if="columns.length === 0" class="browser-state"><strong>没有可见字段</strong></div>
           </template>
@@ -560,6 +914,7 @@ onBeforeUnmount(() => {
               <p v-if="index.index_type">{{ index.index_type }}</p>
               <p v-if="index.included_columns?.length">INCLUDE {{ index.included_columns.join(", ") }}</p>
               <pre v-if="index.filter">{{ index.filter }}</pre>
+              <button v-if="!index.is_primary" class="inline-danger" type="button" @click="dropIndexSql(index)">删除索引 SQL</button>
             </article>
             <div v-if="indexes.length === 0" class="browser-state"><strong>没有可见索引</strong></div>
           </template>
@@ -571,6 +926,7 @@ onBeforeUnmount(() => {
               </header>
               <code>{{ foreignKey.column }} → {{ foreignKey.ref_schema ? `${foreignKey.ref_schema}.` : "" }}{{ foreignKey.ref_table }}.{{ foreignKey.ref_column }}</code>
               <p v-if="foreignKey.on_update || foreignKey.on_delete">ON UPDATE {{ foreignKey.on_update || "—" }} · ON DELETE {{ foreignKey.on_delete || "—" }}</p>
+              <button class="inline-danger" type="button" @click="dropConstraintSql(foreignKey.name)">删除外键 SQL</button>
             </article>
             <div v-if="foreignKeys.length === 0" class="browser-state"><strong>没有可见外键</strong></div>
           </template>
@@ -585,6 +941,7 @@ onBeforeUnmount(() => {
               <code v-if="constraint.columns.length">{{ constraint.columns.join(", ") }}</code>
               <pre>{{ constraint.definition }}</pre>
               <p>{{ constraint.enabled ? "ENABLED" : "DISABLED" }} · {{ constraint.valid ? "VALID" : "INVALID" }}<template v-if="constraint.deferrable"> · DEFERRABLE</template></p>
+              <button class="inline-danger" type="button" @click="dropConstraintSql(constraint.name)">删除约束 SQL</button>
             </article>
             <div v-if="constraints.length === 0" class="browser-state"><strong>没有可见约束</strong></div>
           </template>
@@ -600,6 +957,21 @@ onBeforeUnmount(() => {
               <pre v-if="trigger.statement">{{ trigger.statement }}</pre>
             </article>
             <div v-if="triggers.length === 0" class="browser-state"><strong>没有可见触发器</strong></div>
+          </template>
+          <template v-else-if="detailTab === 'partitions'">
+            <article v-for="item in partitions" :key="item.name" class="metadata-card">
+              <header><strong>{{ item.name }}</strong><span><em>#{{ item.position }}</em><em>{{ item.partition_type }}</em></span></header>
+              <code>{{ item.partition_key }}</code><pre>{{ item.value }}</pre>
+              <p v-if="item.online != null">{{ item.online ? "ONLINE" : "OFFLINE" }}</p>
+            </article>
+            <div v-if="partitions.length === 0" class="browser-state"><strong>没有分区或当前数据库不支持分区元数据</strong></div>
+          </template>
+          <template v-else-if="detailTab === 'subpartitions'">
+            <article v-for="item in subpartitions" :key="item.name" class="metadata-card">
+              <header><strong>{{ item.name }}</strong><span><em>#{{ item.position }}</em><em>{{ item.partition_type }}</em></span></header>
+              <code>{{ item.partition_key }}</code><pre>{{ item.value }}</pre>
+            </article>
+            <div v-if="subpartitions.length === 0" class="browser-state"><strong>没有子分区或当前数据库不支持子分区元数据</strong></div>
           </template>
           <div v-else class="source-view">
             <pre>{{ definition || "没有可见定义" }}</pre>
@@ -653,6 +1025,29 @@ onBeforeUnmount(() => {
 .schema-objects {
   display: grid;
   gap: 8px;
+}
+.schema-management-actions,
+.routine-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--line);
+}
+.schema-management-actions button,
+.routine-actions button,
+.management-action {
+  min-height: 40px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: rgba(199, 255, 61, 0.055);
+  color: var(--acid);
+  font: inherit;
+  font-size: 8px;
+}
+.management-action {
+  border: 1px solid var(--line);
+}
+.routine-actions {
+  margin-top: 8px;
 }
 .object-tabs,
 .detail-tabs {
@@ -821,6 +1216,9 @@ onBeforeUnmount(() => {
 .column-actions button:disabled {
   color: var(--faint);
   opacity: 0.65;
+}
+.table-actions button.danger {
+  color: var(--danger);
 }
 .column-actions {
   border: 1px solid var(--line);
@@ -1014,6 +1412,89 @@ onBeforeUnmount(() => {
   color: var(--muted);
   font-size: 8px;
   overflow-wrap: anywhere;
+}
+.object-search {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  border: 1px solid var(--line);
+  border-top: 0;
+  background: #0a0d0b;
+}
+.object-search input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 11px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 9px;
+}
+.object-search button,
+.administration-actions button,
+.inline-danger {
+  border: 0;
+  background: transparent;
+  padding: 10px;
+  color: var(--acid);
+  font: inherit;
+  font-size: 8px;
+}
+.object-search button {
+  border-left: 1px solid var(--line);
+}
+.search-results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: 210px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-top: 0;
+}
+.search-results button {
+  min-width: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  padding: 10px;
+  color: var(--ink);
+  text-align: left;
+}
+.search-results small,
+.search-results strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-results small {
+  color: var(--muted);
+  font-size: 7px;
+}
+.search-results strong {
+  margin-top: 5px;
+  font-size: 9px;
+}
+.administration-actions {
+  display: grid;
+  grid-template-columns: 1fr repeat(3, auto);
+  align-items: center;
+  border: 1px solid var(--line);
+  border-top: 0;
+}
+.administration-actions span {
+  padding: 10px;
+  color: var(--muted);
+  font-size: 8px;
+}
+.administration-actions button {
+  border-left: 1px solid var(--line);
+}
+.inline-danger {
+  margin-top: 9px;
+  border: 1px solid rgba(255, 90, 90, 0.25);
+  color: var(--danger);
 }
 @keyframes spin {
   to {

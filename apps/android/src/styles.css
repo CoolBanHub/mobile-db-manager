@@ -1,17 +1,18 @@
 :root {
   font-family: "Azeret Mono Variable", "PingFang SC", "Microsoft YaHei", monospace;
-  color: #f1f4ed;
-  background: #0b0d0c;
+  color: #172033;
+  background: #f5f7fb;
   font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  --ink: #f1f4ed;
-  --muted: #8f978f;
-  --faint: #59605b;
-  --line: rgba(235, 242, 232, 0.12);
-  --panel: rgba(20, 24, 21, 0.88);
-  --acid: #c7ff3d;
-  --amber: #ffbb3d;
-  --danger: #ff655f;
+  text-rendering: auto;
+  color-scheme: light;
+  --ink: #172033;
+  --muted: #667085;
+  --faint: #98a2b3;
+  --line: #cbd5e1;
+  --panel: #ffffff;
+  --acid: #2563eb;
+  --amber: #d97706;
+  --danger: #dc2626;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
 }
@@ -29,7 +30,11 @@ body,
 
 body {
   min-width: 320px;
-  background: radial-gradient(circle at 82% -8%, rgba(199, 255, 61, 0.13), transparent 34%), #0b0d0c;
+  font-weight: 500;
+  -webkit-font-smoothing: auto;
+  background:
+    radial-gradient(circle at 82% -8%, rgba(37, 99, 235, 0.1), transparent 34%),
+    linear-gradient(180deg, #ffffff 0, #f5f7fb 42%, #f1f4f8 100%);
   overscroll-behavior: none;
 }
 
@@ -55,8 +60,8 @@ button {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  opacity: 0.3;
-  background-image: linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  opacity: 0.24;
+  background-image: linear-gradient(rgba(23, 32, 51, 0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(23, 32, 51, 0.035) 1px, transparent 1px);
   background-size: 28px 28px;
   mask-image: linear-gradient(to bottom, black, transparent 72%);
 }
@@ -134,7 +139,8 @@ button {
   gap: 7px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 24px rgba(23, 32, 51, 0.06);
   padding: 0 11px;
   color: var(--muted);
   font-size: 10px;
@@ -203,9 +209,9 @@ button {
   margin-top: clamp(34px, 7vh, 64px);
   border: 1px solid var(--line);
   border-top: 2px solid var(--acid);
-  background: linear-gradient(135deg, rgba(199, 255, 61, 0.055), transparent 32%), var(--panel);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.055), transparent 32%), var(--panel);
   padding: 20px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.36);
+  box-shadow: 0 24px 80px rgba(23, 32, 51, 0.1);
 }
 
 .login-card {
@@ -238,6 +244,10 @@ button {
   margin-bottom: 8px;
   color: #bdc3bb;
   font-size: 11px;
+}
+
+.login-card label + label {
+  margin-top: 14px;
 }
 
 .login-card input {
@@ -738,7 +748,8 @@ button {
   min-height: calc(72px + var(--safe-bottom));
   grid-template-columns: repeat(4, 1fr);
   border-top: 1px solid var(--line);
-  background: rgba(11, 13, 12, 0.95);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 -10px 30px rgba(23, 32, 51, 0.06);
   padding: 5px 8px var(--safe-bottom);
   backdrop-filter: blur(20px);
 }
@@ -751,7 +762,7 @@ button {
   gap: 4px;
   border: 0;
   background: transparent;
-  color: #646b65;
+  color: #7d899b;
   font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 9px;
 }
@@ -816,4 +827,214 @@ button {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* Light theme surface normalization.
+   Component styles intentionally keep their database-specific accent colors; this
+   layer only replaces the former terminal-black surfaces with a calm paper UI. */
+.app-shell {
+  color: var(--ink);
+}
+
+.topbar {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px);
+}
+
+.server-card,
+.login-card,
+.status-panel,
+.settings-card,
+.settings-list button,
+.saved-server-list button {
+  box-shadow: 0 12px 34px rgba(23, 32, 51, 0.055);
+}
+
+.login-card label > span,
+.server-card label > span {
+  color: var(--muted);
+}
+
+.login-card input,
+.server-card input,
+.settings-card input:not([type="checkbox"]),
+.settings-card select {
+  background: #f8fafc;
+}
+
+.server-card input::placeholder {
+  color: #98a2b3;
+}
+
+.login-card input:focus,
+.server-card input:focus {
+  border-color: rgba(37, 99, 235, 0.55);
+}
+
+.empty-module {
+  border-color: #d8dee8;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.035), rgba(255, 255, 255, 0.74) 44%);
+}
+
+.primary-action,
+.bottom-nav button.active .nav-symbol {
+  text-shadow: none;
+}
+
+.primary-action {
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.2);
+}
+
+.setup-footer {
+  color: #98a2b3;
+}
+
+.form-message[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.form-message[data-tone="warning"] {
+  color: var(--amber);
+}
+
+/* Scoped component styles contain a handful of literal dark colors. These
+   selectors keep editors, tables, sheets and popovers legible in light mode. */
+:where(
+  .editor,
+  .table-search,
+  .table-strip article,
+  .explain-panel,
+  .result-panel,
+  .query-builder,
+  .managed-connection,
+  .catalog-search,
+  .filters,
+  .entry,
+  .folder-entry,
+  .saved-toolbar,
+  .unsupported-browser,
+  .object-tabs,
+  .detail-tabs,
+  .object-search,
+  .document-card,
+  .data-scroll,
+  .cell-sheet
+) {
+  background-color: #ffffff !important;
+}
+
+:where(
+  .editor-sheet,
+  .detail-sheet,
+  .cell-detail,
+  .cell-sheet
+) {
+  background: #ffffff !important;
+  box-shadow: 0 -24px 70px rgba(23, 32, 51, 0.18) !important;
+}
+
+:where(
+  .connection-tabs,
+  .detail-sheet > footer,
+  .detail-sheet > footer button
+) {
+  background: #ffffff !important;
+}
+
+:where(
+  .editor-grid input,
+  .editor-grid select,
+  .editor-grid textarea,
+  .advanced-guard > input,
+  .save-sql input,
+  .search,
+  .filters select,
+  .filters input,
+  .detail-sheet section pre,
+  .manage-sheet input,
+  .manage-sheet select,
+  .mongo-query textarea,
+  .mongo-query input,
+  .db-strip select,
+  .key-search input,
+  .filter-builder select,
+  .filter-builder input,
+  footer select,
+  .metadata-card pre,
+  .source-view pre,
+  .value-view pre,
+  .console-stage article pre,
+  .console-stage > form
+) {
+  background: #f8fafc !important;
+  color: var(--ink) !important;
+  color-scheme: light !important;
+}
+
+.editor textarea,
+.metadata-card pre,
+.source-view pre,
+.document-card code,
+.value-view pre,
+.console-stage article pre {
+  color: #24324a !important;
+  caret-color: var(--acid);
+}
+
+:where(.result-panel th, .data-scroll th) {
+  background: #f2f5f9 !important;
+  color: #1d4ed8 !important;
+}
+
+:where(.suggestion-list) {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border-color: rgba(37, 99, 235, 0.38) !important;
+  box-shadow: 0 -16px 35px rgba(23, 32, 51, 0.14) !important;
+}
+
+:where(.sheet-backdrop, .detail-backdrop, .cell-detail-backdrop, .cell-sheet-backdrop) {
+  background: rgba(23, 32, 51, 0.34) !important;
+}
+
+:where(.rail-switch span) {
+  background: #e8edf4 !important;
+}
+
+:where(.query-chart i) {
+  background: #edf1f6 !important;
+}
+
+:where(
+  .execution-modes button.active,
+  .result-tabs button.active,
+  .managed-connection:focus-within,
+  .table-strip article:focus-within
+) {
+  background-color: rgba(37, 99, 235, 0.07) !important;
+}
+
+:where(.cell-edit-input, .special-editor, .transport-panel) {
+  background-color: rgba(37, 99, 235, 0.035) !important;
+}
+
+:where(.field-builder > button) {
+  background: #f8fafc !important;
+}
+
+:where(
+  .add-connection,
+  .save-action,
+  .query-actions button:not(.cancel-action),
+  .mode-switch button.active,
+  .detail-sheet > footer button.primary
+) {
+  color: #ffffff !important;
+}
+
+button,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: rgba(37, 99, 235, 0.12);
 }
