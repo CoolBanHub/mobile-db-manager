@@ -54,7 +54,7 @@ export class TreeNodeLoadRegistry {
     // Always bump the prefix root, even when no load was recorded for it yet.
     this.generations.set(nodeId, (this.generations.get(nodeId) ?? 0) + 1);
     const prefix = `${nodeId}:`;
-    for (const id of [...this.generations.keys()]) {
+    for (const id of this.generations.keys()) {
       if (id !== nodeId && id.startsWith(prefix)) {
         this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
       }
@@ -64,7 +64,7 @@ export class TreeNodeLoadRegistry {
   /** Bump recorded generations for descendants only (not the parent load itself). */
   invalidateDescendants(parentId: string): void {
     const prefix = `${parentId}:`;
-    for (const id of [...this.generations.keys()]) {
+    for (const id of this.generations.keys()) {
       if (id.startsWith(prefix)) {
         this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
       }
@@ -91,35 +91,35 @@ export class TreeNodeLoadRegistry {
   }
 
   private createHandle(nodeId: string, generation: number): TreeNodeLoadHandle {
-    const registry = this;
-    return {
+    const handle: TreeNodeLoadHandle = {
       nodeId,
       generation,
-      isCurrent() {
-        return registry.isCurrent(nodeId, generation);
+      isCurrent: () => {
+        return this.isCurrent(nodeId, generation);
       },
-      reclaim(node: TreeNodeLike) {
+      reclaim: (node: TreeNodeLike) => {
         if (node.id !== nodeId) {
-          return registry.begin(node);
+          return this.begin(node);
         }
-        if (registry.isCurrent(nodeId, generation)) {
+        if (this.isCurrent(nodeId, generation)) {
           node.isLoading = true;
-          return this;
+          return handle;
         }
-        return registry.begin(node);
+        return this.begin(node);
       },
-      targetNode(findLive, isConnected) {
-        if (!registry.isCurrent(nodeId, generation)) return null;
+      targetNode: (findLive, isConnected) => {
+        if (!this.isCurrent(nodeId, generation)) return null;
         const current = findLive(nodeId);
         if (!current) return null;
         if (current.connectionId && !isConnected(current.connectionId)) return null;
         return current;
       },
-      finish(findLive) {
-        if (!registry.isCurrent(nodeId, generation)) return;
+      finish: (findLive) => {
+        if (!this.isCurrent(nodeId, generation)) return;
         const current = findLive(nodeId);
         if (current) current.isLoading = false;
       },
     };
+    return handle;
   }
 }

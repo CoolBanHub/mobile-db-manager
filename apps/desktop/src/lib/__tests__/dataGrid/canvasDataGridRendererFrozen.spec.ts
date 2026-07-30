@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CANVAS_DATA_GRID_ROW_HEIGHT, drawCanvasDataGrid, type DrawCanvasDataGridOptions } from "@/lib/dataGrid/canvasDataGridRenderer";
+import { drawCanvasDataGrid, type DrawCanvasDataGridOptions } from "@/lib/dataGrid/canvasDataGridRenderer";
 
 function createMockCanvas(width = 800, height = 400) {
   const canvas = document.createElement("canvas");

@@ -23,7 +23,7 @@ export function kvExportFilenameStem(path: string): string {
     .split("/")
     .filter(Boolean)
     .join("-")
-    .replace(/[<>:"\\|?*\u0000-\u001f]/g, "-")
+    .replace(/[<>:"\\|?*\p{Cc}]/gu, "-")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
