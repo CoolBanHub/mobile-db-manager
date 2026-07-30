@@ -6,8 +6,8 @@ import MetadataBrowser from "./components/MetadataBrowser.vue";
 import QueryWorkbench from "./components/QueryWorkbench.vue";
 import UnsupportedConnectionBrowser from "./components/UnsupportedConnectionBrowser.vue";
 import { databaseCapability, isMobileSqlDatabase } from "./lib/databaseCapabilities";
-import { DIRECT_DATABASE_URL } from "./lib/directDatabase";
-import { apiGetJson, type MobileConnectionSummary, type MobileQueryDraft } from "./lib/mobileApi";
+import { listDirectConnections } from "./lib/directDatabase";
+import type { MobileConnectionSummary, MobileQueryDraft } from "./lib/mobileTypes";
 
 type MobileSection = "connections" | "query" | "history" | "settings";
 
@@ -17,7 +17,6 @@ const connectionsLoading = ref(true);
 const connectionsError = ref("");
 const browsingConnection = ref<MobileConnectionSummary | null>(null);
 const queryDraft = ref<MobileQueryDraft | null>(null);
-const requireDeviceLock = ref(localStorage.getItem("dbx-mobile.direct.require-lock") !== "false");
 const sqlConnections = computed(() => connections.value.filter((connection) => isMobileSqlDatabase(connection.dbType)));
 const browsingMode = computed(() =>
   browsingConnection.value ? databaseCapability(browsingConnection.value.dbType).browse : null,
@@ -28,7 +27,7 @@ async function loadConnections() {
   connectionsLoading.value = true;
   connectionsError.value = "";
   try {
-    connections.value = await apiGetJson(DIRECT_DATABASE_URL, "/api/mobile/connections", null, {});
+    connections.value = await listDirectConnections();
   } catch (error) {
     connections.value = [];
     connectionsError.value = error instanceof Error ? error.message : "读取本机连接失败";
@@ -48,10 +47,6 @@ function openQueryDraft(draft: Omit<MobileQueryDraft, "nonce">) {
 
 function sectionLabel(section: MobileSection) {
   return { connections: "连接", query: "查询", history: "历史", settings: "设置" }[section];
-}
-
-function saveSecurityPreference() {
-  localStorage.setItem("dbx-mobile.direct.require-lock", String(requireDeviceLock.value));
 }
 
 onMounted(loadConnections);
@@ -85,7 +80,7 @@ onMounted(loadConnections);
       <section class="status-panel">
         <div>
           <span class="panel-kicker">DIRECT MODE</span>
-          <strong>不依赖 DBX Web</strong>
+          <strong>安卓端独立运行</strong>
           <p>查询流量由手机直接发送到数据库。生产环境请配合 VPN 或数据库 IP 白名单。</p>
         </div>
         <span>{{ connections.length }} 个连接</span>
@@ -111,9 +106,7 @@ onMounted(loadConnections);
             <button v-if="browsingConnection" class="catalog-back" type="button" @click="browsingConnection = null">← 返回连接管理</button>
             <MetadataBrowser
               v-if="browsingConnection && browsingMode === 'relational'"
-              :base-url="DIRECT_DATABASE_URL"
               :connections="[browsingConnection]"
-              :token="null"
               @open-query="openQueryDraft"
             />
             <UnsupportedConnectionBrowser
@@ -122,10 +115,7 @@ onMounted(loadConnections);
             />
             <ConnectionManager
               v-else
-              :base-url="DIRECT_DATABASE_URL"
               :connections="connections"
-              server-id="android-local"
-              :token="null"
               @browse="openConnectionBrowser"
               @changed="loadConnections"
             />
@@ -134,18 +124,14 @@ onMounted(loadConnections);
 
         <QueryWorkbench
           v-else-if="activeSection === 'query'"
-          :base-url="DIRECT_DATABASE_URL"
           :connections="sqlConnections"
           :draft="queryDraft"
-          :token="null"
           @draft-consumed="queryDraft = null"
         />
 
         <HistoryLibrary
           v-else-if="activeSection === 'history'"
-          :base-url="DIRECT_DATABASE_URL"
           :connections="connections"
-          :token="null"
           @open-query="openQueryDraft"
         />
 
@@ -153,11 +139,7 @@ onMounted(loadConnections);
           <section class="settings-card">
             <div class="card-index">LOCAL / SECURITY</div>
             <h3>本机安全</h3>
-            <p class="field-hint">数据库密码不会离开设备，完整连接配置使用 Android Keystore AES-GCM 加密。</p>
-            <label class="secure-toggle">
-              <input v-model="requireDeviceLock" type="checkbox" @change="saveSecurityPreference" />
-              <span><b>启动时使用系统锁屏</b><small>预留设置；后续版本将把每次首次解锁与数据库凭据读取绑定</small></span>
-            </label>
+            <p class="field-hint">数据库密码不会离开设备，完整连接配置使用 Android Keystore AES-GCM 加密；界面只能通过连接 ID 调用原生驱动。</p>
           </section>
           <section class="settings-card">
             <div class="card-index">NETWORK / NOTICE</div>

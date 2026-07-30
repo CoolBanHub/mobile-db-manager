@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref } from "vue";
 import {
-  ApiError,
-  apiDeleteJson,
-  apiGetJson,
-  apiPostJson,
-  type MobileConnectionDraft,
-  type MobileConnectionEditor,
-  type MobileConnectionSummary,
-} from "../lib/mobileApi";
+  deleteDirectConnection,
+  getDirectConnection,
+  saveDirectConnection,
+  testDirectConnection,
+} from "../lib/directDatabase";
+import type { MobileConnectionDraft, MobileConnectionSummary } from "../lib/mobileTypes";
 import { databaseCapability, mobileDatabaseCapabilities } from "../lib/databaseCapabilities";
 import {
   getConnectionPreference,
@@ -17,15 +15,9 @@ import {
   type ConnectionEnvironment,
 } from "../lib/connectionPreferences";
 
-const props = defineProps<{
-  baseUrl: string;
-  serverId: string;
-  token: string | null;
-  connections: MobileConnectionSummary[];
-}>();
+const props = defineProps<{ connections: MobileConnectionSummary[] }>();
 
 const emit = defineEmits<{
-  authExpired: [];
   changed: [];
   browse: [connection: MobileConnectionSummary];
 }>();
@@ -47,9 +39,7 @@ const sslCertificateError = computed(() =>
   editorTone.value === "danger" && editorMessage.value.startsWith("SSL 证书验证失败"),
 );
 
-const databaseTypes = mobileDatabaseCapabilities.filter((item) =>
-  ["postgres", "mysql", "sqlserver", "redis", "mongodb"].includes(item.value),
-);
+const databaseTypes = mobileDatabaseCapabilities;
 
 function blankDraft(): MobileConnectionDraft {
   return {
@@ -68,13 +58,8 @@ function blankDraft(): MobileConnectionDraft {
     isProduction: false,
     connectTimeoutSecs: 10,
     queryTimeoutSecs: 60,
-    idleTimeoutSecs: 60,
     keepaliveIntervalSecs: 30,
-    caCertPath: "",
-    clientCertPath: "",
-    clientKeyPath: "",
     proxyEnabled: false,
-    proxyType: "http",
     proxyHost: "",
     proxyPort: 8080,
     proxyUsername: "",
@@ -89,70 +74,18 @@ function blankDraft(): MobileConnectionDraft {
     sshPrivateKey: "",
     sshPrivateKeyPassphrase: "",
     connectionString: "",
-    oracleConnectionType: "service_name",
-    sysdba: false,
-    urlParams: "",
-    initScript: "",
-    visibleDatabases: [],
-    visibleSchemas: {},
-    productionDatabases: [],
-    redisConnectionMode: "standalone",
-    redisSentinelMaster: "",
-    redisSentinelNodes: "",
-    redisSentinelUsername: "",
-    redisSentinelPassword: "",
-    redisSentinelTls: false,
-    redisClusterNodes: "",
-    jdbcDriverClass: "",
-    jdbcDriverPaths: [],
-    driverProfile: "",
-    driverLabel: "",
   };
 }
 
 const draft = reactive<MobileConnectionDraft>(blankDraft());
 const currentCapability = computed(() => databaseCapability(draft.dbType));
-const visibleDatabasesText = computed({
-  get: () => draft.visibleDatabases.join("\n"),
-  set: (value: string) => {
-    draft.visibleDatabases = splitLines(value);
-  },
-});
-const productionDatabasesText = computed({
-  get: () => draft.productionDatabases.join("\n"),
-  set: (value: string) => {
-    draft.productionDatabases = splitLines(value);
-  },
-});
-const jdbcDriverPathsText = computed({
-  get: () => draft.jdbcDriverPaths.join("\n"),
-  set: (value: string) => {
-    draft.jdbcDriverPaths = splitLines(value);
-  },
-});
-const visibleSchemasText = computed({
-  get: () => Object.entries(draft.visibleSchemas).map(([database, schemas]) => `${database}: ${schemas.join(", ")}`).join("\n"),
-  set: (value: string) => {
-    draft.visibleSchemas = Object.fromEntries(
-      value
-        .split(/\r?\n/)
-        .map((line) => line.split(/:(.*)/s))
-        .map(([database, schemas]) => [database?.trim(), (schemas ?? "").split(",").map((item) => item.trim()).filter(Boolean)])
-        .filter(([database, schemas]) => Boolean(database) && schemas.length > 0),
-    );
-  },
-});
 const preferenceEnvironment = ref<ConnectionEnvironment>("development");
-
-function splitLines(value: string): string[] {
-  return value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
-}
 
 const filteredConnections = computed(() => {
   void preferenceRevision.value;
   const needle = search.value.trim().toLocaleLowerCase();
   return props.connections.filter((connection) => {
-    const preference = getConnectionPreference(props.serverId, connection.id, connection.isProduction);
+    const preference = getConnectionPreference(connection.id, connection.isProduction);
     if (favoritesOnly.value && !preference.favorite) return false;
     if (environment.value !== "all" && preference.environment !== environment.value) return false;
     return (
@@ -167,19 +100,19 @@ const filteredConnections = computed(() => {
 const groupedConnections = computed(() => {
   const groups = new Map<string, MobileConnectionSummary[]>();
   for (const connection of filteredConnections.value) {
-    const group = getConnectionPreference(props.serverId, connection.id, connection.isProduction).group;
+    const group = getConnectionPreference(connection.id, connection.isProduction).group;
     groups.set(group, [...(groups.get(group) ?? []), connection]);
   }
   return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
 });
 
 function preference(connection: MobileConnectionSummary) {
-  return getConnectionPreference(props.serverId, connection.id, connection.isProduction);
+  return getConnectionPreference(connection.id, connection.isProduction);
 }
 
 function toggleFavorite(connection: MobileConnectionSummary) {
   const current = preference(connection);
-  saveConnectionPreference(props.serverId, connection.id, { ...current, favorite: !current.favorite });
+  saveConnectionPreference(connection.id, { ...current, favorite: !current.favorite });
   preferenceRevision.value += 1;
 }
 
@@ -204,12 +137,7 @@ async function openEdit(connection: MobileConnectionSummary) {
   editorOpen.value = true;
   editorMessage.value = "正在读取安全配置…";
   try {
-    const value = await apiGetJson<MobileConnectionEditor>(
-      props.baseUrl,
-      `/api/mobile/connections/${encodeURIComponent(connection.id)}`,
-      props.token,
-      {},
-    );
+    const value = await getDirectConnection(connection.id);
     Object.assign(draft, {
       id: value.id,
       name: value.name,
@@ -227,13 +155,8 @@ async function openEdit(connection: MobileConnectionSummary) {
       isProduction: value.isProduction,
       connectTimeoutSecs: value.connectTimeoutSecs,
       queryTimeoutSecs: value.queryTimeoutSecs,
-      idleTimeoutSecs: value.idleTimeoutSecs,
       keepaliveIntervalSecs: value.keepaliveIntervalSecs,
-      caCertPath: value.caCertPath,
-      clientCertPath: value.clientCertPath,
-      clientKeyPath: value.clientKeyPath,
       proxyEnabled: value.proxyEnabled,
-      proxyType: value.proxyType,
       proxyHost: value.proxyHost,
       proxyPort: value.proxyPort,
       proxyUsername: value.proxyUsername,
@@ -248,31 +171,13 @@ async function openEdit(connection: MobileConnectionSummary) {
       sshPrivateKey: "",
       sshPrivateKeyPassphrase: "",
       connectionString: value.connectionString,
-      oracleConnectionType: value.oracleConnectionType,
-      sysdba: value.sysdba,
-      urlParams: value.urlParams,
-      initScript: value.initScript,
-      visibleDatabases: value.visibleDatabases,
-      visibleSchemas: value.visibleSchemas,
-      productionDatabases: value.productionDatabases,
-      redisConnectionMode: value.redisConnectionMode,
-      redisSentinelMaster: value.redisSentinelMaster,
-      redisSentinelNodes: value.redisSentinelNodes,
-      redisSentinelUsername: value.redisSentinelUsername,
-      redisSentinelPassword: "",
-      redisSentinelTls: value.redisSentinelTls,
-      redisClusterNodes: value.redisClusterNodes,
-      jdbcDriverClass: value.jdbcDriverClass,
-      jdbcDriverPaths: value.jdbcDriverPaths,
-      driverProfile: value.driverProfile,
-      driverLabel: value.driverLabel,
     });
     hasStoredConnectionString.value = value.hasConnectionString;
     const local = preference(connection);
     groupDraft.value = local.group;
     preferenceEnvironment.value = local.environment;
     const preserved: string[] = [];
-    if (value.hasPassword || value.hasProxyPassword || value.hasSshPassword || value.hasRedisSentinelPassword) preserved.push("密码");
+    if (value.hasPassword || value.hasProxyPassword || value.hasSshPassword) preserved.push("密码");
     if (value.hasSshPrivateKey || value.hasSshPrivateKeyPassphrase) preserved.push("SSH 私钥");
     if (value.hasConnectionString) preserved.push("连接串");
     if (value.tunnelLayerCount) preserved.push(`${value.tunnelLayerCount} 层 SSH/HTTP 隧道`);
@@ -284,11 +189,6 @@ async function openEdit(connection: MobileConnectionSummary) {
 }
 
 function handleError(error: unknown) {
-  if (error instanceof ApiError && error.status === 401) {
-    emit("authExpired");
-    editorOpen.value = false;
-    return;
-  }
   editorTone.value = "danger";
   editorMessage.value = error instanceof Error ? error.message : "操作失败";
   if (editorMessage.value.startsWith("SSL 证书验证失败")) openSslSettings();
@@ -329,15 +229,9 @@ async function testConnection() {
   editorMessage.value = "正在从手机直接测试连接…";
   editorTone.value = "neutral";
   try {
-    const result = await apiPostJson<{ message: string }>(
-      props.baseUrl,
-      "/api/mobile/connections/test",
-      props.token,
-      draft,
-      { timeoutMs: Math.max(35_000, draft.connectTimeoutSecs * 1_000 + 5_000) },
-    );
+    const result = await testDirectConnection(draft);
     editorTone.value = "success";
-    editorMessage.value = result.message || "连接测试通过";
+    editorMessage.value = result || "连接测试通过";
   } catch (error) {
     handleError(error);
   } finally {
@@ -351,13 +245,8 @@ async function saveConnection() {
   editorMessage.value = "正在保存…";
   editorTone.value = "neutral";
   try {
-    const saved = await apiPostJson<MobileConnectionSummary>(
-      props.baseUrl,
-      "/api/mobile/connections/save",
-      props.token,
-      draft,
-    );
-    saveConnectionPreference(props.serverId, saved.id, {
+    const saved = await saveDirectConnection(draft);
+    saveConnectionPreference(saved.id, {
       group: groupDraft.value.trim() || "未分组",
       favorite: draft.id ? preference(saved).favorite : false,
       environment: preferenceEnvironment.value,
@@ -374,8 +263,8 @@ async function saveConnection() {
 async function deleteConnection(connection: MobileConnectionSummary) {
   if (!window.confirm(`删除连接“${connection.name}”？加密保存在本机的凭据也会一并移除。`)) return;
   try {
-    await apiDeleteJson(props.baseUrl, `/api/mobile/connections/${encodeURIComponent(connection.id)}`, props.token);
-    removeConnectionPreference(props.serverId, connection.id);
+    await deleteDirectConnection(connection.id);
+    removeConnectionPreference(connection.id);
     emit("changed");
   } catch (error) {
     handleError(error);
@@ -385,7 +274,7 @@ async function deleteConnection(connection: MobileConnectionSummary) {
 function changeDatabaseType() {
   const selected = databaseCapability(draft.dbType);
   draft.port = selected.port;
-  draft.ssl = !selected.local;
+  draft.ssl = true;
   draft.database = null;
 }
 </script>
@@ -459,7 +348,7 @@ function changeDatabaseType() {
             <option v-for="item in databaseTypes" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select></label>
           <label><span>分组</span><input v-model="groupDraft" placeholder="核心业务" /></label>
-          <label class="wide"><span>主机 / 文件路径</span><input v-model="draft.host" autocapitalize="none" :placeholder="currentCapability.local ? '/data/database.db' : 'db.internal'" /></label>
+          <label class="wide"><span>主机</span><input v-model="draft.host" autocapitalize="none" placeholder="db.internal" /></label>
           <label><span>端口</span><input v-model.number="draft.port" type="number" min="1" max="65535" /></label>
           <label><span>数据库</span><input v-model="draft.database" autocapitalize="none" placeholder="可选，例如 login_system" /></label>
           <label><span>用户名</span><input v-model="draft.username" autocapitalize="none" autocomplete="username" /></label>
@@ -475,16 +364,6 @@ function changeDatabaseType() {
           此类型可在手机端创建、测试和编辑；当前没有专用数据浏览器，不会调用关系型 Schema API。
         </p>
 
-        <div v-if="draft.dbType === 'oracle'" class="special-editor">
-          <div class="editor-grid">
-            <label><span>Oracle 连接方式</span><select v-model="draft.oracleConnectionType">
-              <option value="service_name">Service Name</option><option value="sid">SID</option><option value="tns">TNS</option>
-            </select></label>
-            <label class="inline-check"><input v-model="draft.sysdba" type="checkbox" /><span>SYSDBA</span></label>
-            <label v-if="draft.oracleConnectionType === 'tns'" class="wide"><span>TNS 连接串</span><textarea v-model="draft.connectionString" rows="3" placeholder="留空保留已保存的 TNS 配置"></textarea></label>
-          </div>
-        </div>
-
         <div v-if="draft.dbType === 'mongodb'" class="special-editor">
           <div class="editor-grid">
             <label class="wide"><span>MongoDB URI</span><input v-model="draft.connectionString" autocapitalize="none" autocomplete="off" placeholder="mongodb://…；留空保留已保存 URI" /></label>
@@ -492,19 +371,7 @@ function changeDatabaseType() {
         </div>
 
         <div v-if="draft.dbType === 'redis'" class="special-editor">
-          <div class="editor-grid">
-            <label><span>Redis 模式</span><select v-model="draft.redisConnectionMode">
-              <option value="standalone">Standalone</option>
-            </select></label>
-            <template v-if="draft.redisConnectionMode === 'sentinel'">
-              <label><span>Sentinel Master</span><input v-model="draft.redisSentinelMaster" /></label>
-              <label class="wide"><span>Sentinel 节点</span><textarea v-model="draft.redisSentinelNodes" rows="2" placeholder="host1:26379, host2:26379"></textarea></label>
-              <label><span>Sentinel 用户名</span><input v-model="draft.redisSentinelUsername" /></label>
-              <label><span>Sentinel 密码</span><input v-model="draft.redisSentinelPassword" type="password" placeholder="留空则不修改" /></label>
-              <label class="inline-check"><input v-model="draft.redisSentinelTls" type="checkbox" /><span>Sentinel TLS</span></label>
-            </template>
-            <label v-else-if="draft.redisConnectionMode === 'cluster'" class="wide"><span>Cluster 节点</span><textarea v-model="draft.redisClusterNodes" rows="2" placeholder="host1:6379, host2:6379"></textarea></label>
-          </div>
+          <p class="security-note">当前安卓原生驱动只支持 Redis Standalone，数据库编号请填写在“数据库”字段。</p>
         </div>
 
         <div class="toggle-grid">
@@ -513,24 +380,13 @@ function changeDatabaseType() {
         </div>
 
         <button class="advanced-toggle" type="button" @click="advancedOpen = !advancedOpen">
-          <span>高级参数、驱动与网络</span><b>{{ advancedOpen ? "−" : "＋" }}</b>
+          <span>超时与保活参数</span><b>{{ advancedOpen ? "−" : "＋" }}</b>
         </button>
         <div v-if="advancedOpen" class="advanced-editor">
           <div class="editor-grid">
             <label><span>连接超时 / 秒</span><input v-model.number="draft.connectTimeoutSecs" type="number" min="1" max="300" /></label>
             <label><span>查询超时 / 秒</span><input v-model.number="draft.queryTimeoutSecs" type="number" min="1" max="3600" /></label>
-            <label><span>空闲超时 / 秒</span><input v-model.number="draft.idleTimeoutSecs" type="number" min="1" max="3600" /></label>
             <label><span>保活间隔 / 秒</span><input v-model.number="draft.keepaliveIntervalSecs" type="number" min="1" max="3600" /></label>
-            <label class="wide"><span>URL 参数</span><input v-model="draft.urlParams" autocapitalize="none" placeholder="key=value&…" /></label>
-            <label class="wide"><span>初始化脚本</span><textarea v-model="draft.initScript" rows="4" placeholder="连接建立后执行；请按 Android 驱动能力配置"></textarea></label>
-            <label><span>可见数据库（每行一个）</span><textarea v-model="visibleDatabasesText" rows="4"></textarea></label>
-            <label><span>生产数据库（每行一个）</span><textarea v-model="productionDatabasesText" rows="4"></textarea></label>
-            <label class="wide"><span>可见 Schema（database: schema1, schema2）</span><textarea v-model="visibleSchemasText" rows="4"></textarea></label>
-            <label><span>驱动 Profile</span><input v-model="draft.driverProfile" autocapitalize="none" /></label>
-            <label><span>驱动显示名称</span><input v-model="draft.driverLabel" /></label>
-            <label class="wide"><span>JDBC 驱动类</span><input v-model="draft.jdbcDriverClass" autocapitalize="none" placeholder="com.example.Driver" /></label>
-            <label class="wide"><span>JDBC 驱动路径（每行一个，本机路径）</span><textarea v-model="jdbcDriverPathsText" rows="3"></textarea></label>
-            <label v-if="draft.dbType === 'jdbc'" class="wide"><span>JDBC 连接串</span><input v-model="draft.connectionString" autocapitalize="none" autocomplete="off" placeholder="jdbc:…；留空保留已保存连接串" /></label>
           </div>
         </div>
         </section>
@@ -577,7 +433,7 @@ function changeDatabaseType() {
         <section v-show="editorTab === 'http'" class="connection-tab-panel transport-panel">
           <div class="transport-heading">
             <div><small>HTTP CONNECT</small><h5>HTTP 代理</h5></div>
-            <label class="rail-switch"><input v-model="draft.proxyEnabled" type="checkbox" @change="draft.proxyType = 'http'" /><span></span></label>
+            <label class="rail-switch"><input v-model="draft.proxyEnabled" type="checkbox" /><span></span></label>
           </div>
           <p>通过支持 CONNECT 方法的 HTTP 代理建立数据库 TCP 通道；也可作为 SSH 跳板机的上游代理。</p>
           <div class="editor-grid">
@@ -652,7 +508,7 @@ function changeDatabaseType() {
 .connection-tab-panel { animation: tab-in .16s ease-out; }
 @keyframes tab-in { from { opacity: .35; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 10px; }
-.editor-grid label, .settings-card label { min-width: 0; cursor: text; }
+.editor-grid label { min-width: 0; cursor: text; }
 .editor-grid label.wide { grid-column: 1 / -1; }
 .editor-grid label > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 9px; }
 .editor-grid input, .editor-grid select, .editor-grid textarea { width: 100%; min-height: 48px; border: 1px solid var(--line); border-radius: 0; outline: 0; background: #080a09; padding: 0 12px; color: var(--ink); font-size: 12px; touch-action: manipulation; }

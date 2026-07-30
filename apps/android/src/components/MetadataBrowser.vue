@@ -1,12 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
 import TableDataBrowser from "./TableDataBrowser.vue";
+import { buildDirectTableTemplate, loadDirectMetadata } from "../lib/directDatabase";
 import {
-  ApiError,
-  apiGetJson,
-  apiPostJson,
   type ColumnInfo,
-  type ConstraintInfo,
   type DatabaseInfo,
   type DatabaseObjectInfo,
   type ForeignKeyInfo,
@@ -14,31 +11,18 @@ import {
   type MobileConnectionSummary,
   type MobileQueryDraft,
   type MobileTableTarget,
-  type MobileTableTemplateResponse,
-  type ObjectStatistics,
-  type ObjectSource,
-  type OwnerInfo,
-  type PartitionInfo,
-  type RuleInfo,
-  type SequenceInfo,
-  type SubpartitionInfo,
-  type ExtensionInfo,
   type TableInfo,
-  type TriggerInfo,
-} from "../lib/mobileApi";
+} from "../lib/mobileTypes";
 
-type BrowseLevel = "connections" | "databases" | "schemas" | "tables" | "details" | "routine" | "data";
-type SchemaSection = "relations" | "routines" | "sequences" | "rules" | "extensions" | "statistics" | "owners";
-type DetailTab = "columns" | "indexes" | "foreignKeys" | "constraints" | "triggers" | "partitions" | "subpartitions" | "definition";
+type BrowseLevel = "connections" | "databases" | "schemas" | "tables" | "details" | "data";
+type SchemaSection = "relations" | "routines";
+type DetailTab = "columns" | "indexes" | "foreignKeys";
 
 const props = defineProps<{
-  baseUrl: string;
-  token: string | null;
   connections: MobileConnectionSummary[];
 }>();
 
 const emit = defineEmits<{
-  authExpired: [];
   openQuery: [draft: Omit<MobileQueryDraft, "nonce">];
 }>();
 
@@ -56,19 +40,6 @@ const routinesLoaded = ref(false);
 const columns = ref<ColumnInfo[]>([]);
 const indexes = ref<IndexInfo[]>([]);
 const foreignKeys = ref<ForeignKeyInfo[]>([]);
-const constraints = ref<ConstraintInfo[]>([]);
-const triggers = ref<TriggerInfo[]>([]);
-const partitions = ref<PartitionInfo[]>([]);
-const subpartitions = ref<SubpartitionInfo[]>([]);
-const sequences = ref<SequenceInfo[]>([]);
-const rules = ref<RuleInfo[]>([]);
-const extensions = ref<ExtensionInfo[]>([]);
-const statistics = ref<ObjectStatistics[]>([]);
-const owners = ref<OwnerInfo[]>([]);
-const schemaCollectionsLoaded = ref<Partial<Record<SchemaSection, boolean>>>({});
-const definition = ref("");
-const routineSource = ref<ObjectSource | null>(null);
-const selectedRoutine = ref<DatabaseObjectInfo | null>(null);
 const schemaSection = ref<SchemaSection>("relations");
 const detailTab = ref<DetailTab>("columns");
 const detailLoaded = ref<Partial<Record<DetailTab, boolean>>>({});
@@ -80,13 +51,10 @@ const errorMessage = ref("");
 const hasMoreTables = ref(false);
 const tableTarget = ref<MobileTableTarget | null>(null);
 const actionTable = ref("");
-const objectSearch = ref("");
-const objectSearchResults = ref<DatabaseObjectInfo[]>([]);
-const objectSearching = ref(false);
 let retryAction: (() => Promise<void>) | null = null;
 let tableActionRequestId = 0;
 let detailRequestId = 0;
-const TABLE_BROWSING_DATABASE_TYPES = new Set(["postgres", "mysql", "sqlserver", "oracle", "sqlite", "clickhouse"]);
+const TABLE_BROWSING_DATABASE_TYPES = new Set(["postgres", "mysql", "sqlserver"]);
 
 const supportsTableBrowsing = computed(() => TABLE_BROWSING_DATABASE_TYPES.has(selectedConnection.value?.dbType ?? ""));
 
@@ -96,21 +64,16 @@ const title = computed(() => {
   if (level.value === "schemas") return "Schema";
   if (level.value === "tables") return "表与视图";
   if (level.value === "details") return "对象详情";
-  if (level.value === "routine") return selectedRoutine.value?.object_type === "PROCEDURE" ? "存储过程" : "函数";
   if (level.value === "data") return "表数据";
   return "元数据";
 });
 
 const contextLabel = computed(() => {
-  const parts = [selectedConnection.value?.name, selectedDatabase.value, selectedSchema.value, selectedTable.value?.name, selectedRoutine.value?.name].filter(Boolean);
+  const parts = [selectedConnection.value?.name, selectedDatabase.value, selectedSchema.value, selectedTable.value?.name].filter(Boolean);
   return parts.join(" / ");
 });
 
 function handleError(error: unknown, retry: () => Promise<void>) {
-  if (error instanceof ApiError && error.status === 401) {
-    emit("authExpired");
-    return;
-  }
   errorMessage.value = error instanceof Error ? error.message : "元数据加载失败";
   retryAction = retry;
 }
@@ -144,13 +107,10 @@ async function openConnection(connection: MobileConnectionSummary) {
   tables.value = [];
   routines.value = [];
   routinesLoaded.value = false;
-  objectSearch.value = "";
-  objectSearchResults.value = [];
-  schemaCollectionsLoaded.value = {};
   columns.value = [];
   level.value = "databases";
   await runLoad(async () => {
-    databases.value = await apiGetJson<DatabaseInfo[]>(props.baseUrl, "/api/mobile/schema/databases", props.token, { connection_id: connection.id });
+    databases.value = await loadDirectMetadata<DatabaseInfo[]>("databases", { connectionId: connection.id });
   });
 }
 
@@ -164,19 +124,15 @@ async function openDatabase(database: DatabaseInfo) {
   tables.value = [];
   routines.value = [];
   routinesLoaded.value = false;
-  objectSearch.value = "";
-  objectSearchResults.value = [];
-  schemaCollectionsLoaded.value = {};
   columns.value = [];
   schemaSection.value = "relations";
   level.value = "schemas";
 
   const connectionId = selectedConnection.value.id;
   await runLoad(async () => {
-    schemas.value = await apiGetJson<string[]>(props.baseUrl, "/api/mobile/schema/schemas", props.token, {
-      connection_id: connectionId,
+    schemas.value = await loadDirectMetadata<string[]>("schemas", {
+      connectionId,
       database: database.name,
-      apply_visible_filter: "true",
     });
     if (schemas.value.length === 0) {
       level.value = "tables";
@@ -193,9 +149,6 @@ async function openSchema(schema: string) {
   tables.value = [];
   routines.value = [];
   routinesLoaded.value = false;
-  objectSearch.value = "";
-  objectSearchResults.value = [];
-  schemaCollectionsLoaded.value = {};
   columns.value = [];
   schemaSection.value = "relations";
   level.value = "tables";
@@ -204,8 +157,8 @@ async function openSchema(schema: string) {
 }
 
 async function fetchTables(connectionId: string, database: string, schema: string, offset: number) {
-  const page = await apiGetJson<TableInfo[]>(props.baseUrl, "/api/mobile/schema/tables", props.token, {
-    connection_id: connectionId,
+  const page = await loadDirectMetadata<TableInfo[]>("tables", {
+    connectionId,
     database,
     schema,
     limit: TABLE_PAGE_SIZE,
@@ -217,62 +170,14 @@ async function fetchTables(connectionId: string, database: string, schema: strin
 
 async function fetchRoutines() {
   if (!selectedConnection.value || routinesLoaded.value) return;
-  routines.value = await apiGetJson<DatabaseObjectInfo[]>(props.baseUrl, "/api/mobile/schema/objects", props.token, {
-    connection_id: selectedConnection.value.id,
+  routines.value = await loadDirectMetadata<DatabaseObjectInfo[]>("objects", {
+    connectionId: selectedConnection.value.id,
     database: selectedDatabase.value,
     schema: selectedSchema.value,
-    object_types: "FUNCTION,PROCEDURE",
     limit: 200,
     offset: 0,
   });
   routinesLoaded.value = true;
-}
-
-async function searchDatabaseObjects() {
-  if (!selectedConnection.value || !objectSearch.value.trim()) {
-    objectSearchResults.value = [];
-    return;
-  }
-  objectSearching.value = true;
-  errorMessage.value = "";
-  try {
-    objectSearchResults.value = await apiGetJson<DatabaseObjectInfo[]>(
-      props.baseUrl,
-      "/api/mobile/schema/objects",
-      props.token,
-      {
-        connection_id: selectedConnection.value.id,
-        database: selectedDatabase.value,
-        schema: "",
-        filter: objectSearch.value.trim(),
-        limit: 200,
-        offset: 0,
-      },
-    );
-  } catch (error) {
-    handleError(error, searchDatabaseObjects);
-  } finally {
-    objectSearching.value = false;
-  }
-}
-
-function openSearchedObject(item: DatabaseObjectInfo) {
-  const type = item.object_type.toUpperCase();
-  if (type.includes("FUNCTION") || type.includes("PROCEDURE")) {
-    selectedSchema.value = item.schema || selectedSchema.value;
-    void openRoutine(item);
-    return;
-  }
-  const table = tables.value.find(
-    (candidate) => candidate.name === item.name && (!item.schema || candidate.parent_schema === item.schema),
-  );
-  if (table) {
-    selectedSchema.value = item.schema || selectedSchema.value;
-    void openTable(table);
-    return;
-  }
-  selectedSchema.value = item.schema || selectedSchema.value;
-  openManagementSql(`SELECT * FROM ${qualifiedObject(item.name)} LIMIT 100;`);
 }
 
 async function selectSchemaSection(section: SchemaSection) {
@@ -280,29 +185,6 @@ async function selectSchemaSection(section: SchemaSection) {
   errorMessage.value = "";
   if (section === "routines" && !routinesLoaded.value) {
     await runLoad(fetchRoutines);
-  } else if (!["relations", "routines"].includes(section) && !schemaCollectionsLoaded.value[section]) {
-    await runLoad(async () => {
-      const params = {
-        connection_id: selectedConnection.value?.id ?? "",
-        database: selectedDatabase.value,
-        schema: selectedSchema.value,
-      };
-      if (section === "sequences") {
-        sequences.value = await apiGetJson<SequenceInfo[]>(props.baseUrl, "/api/mobile/schema/sequences", props.token, {
-          ...params,
-          with_last_values: "true",
-        });
-      } else if (section === "rules") {
-        rules.value = await apiGetJson<RuleInfo[]>(props.baseUrl, "/api/mobile/schema/rules", props.token, params);
-      } else if (section === "extensions") {
-        extensions.value = await apiGetJson<ExtensionInfo[]>(props.baseUrl, "/api/mobile/schema/extensions", props.token, params);
-      } else if (section === "statistics") {
-        statistics.value = await apiGetJson<ObjectStatistics[]>(props.baseUrl, "/api/mobile/schema/object-statistics", props.token, params);
-      } else if (section === "owners") {
-        owners.value = await apiGetJson<OwnerInfo[]>(props.baseUrl, "/api/mobile/schema/owners", props.token, params);
-      }
-      schemaCollectionsLoaded.value = { ...schemaCollectionsLoaded.value, [section]: true };
-    });
   }
 }
 
@@ -324,15 +206,9 @@ async function openTable(table: TableInfo) {
   invalidateTableAction();
   detailRequestId++;
   selectedTable.value = table;
-  selectedRoutine.value = null;
   columns.value = [];
   indexes.value = [];
   foreignKeys.value = [];
-  constraints.value = [];
-  triggers.value = [];
-  partitions.value = [];
-  subpartitions.value = [];
-  definition.value = "";
   detailLoaded.value = {};
   detailTab.value = "columns";
   level.value = "details";
@@ -341,7 +217,7 @@ async function openTable(table: TableInfo) {
 
 function detailParams() {
   return {
-    connection_id: selectedConnection.value?.id ?? "",
+    connectionId: selectedConnection.value?.id ?? "",
     database: selectedDatabase.value,
     schema: selectedSchema.value,
     table: selectedTable.value?.name ?? "",
@@ -363,53 +239,26 @@ async function loadDetail(tab: DetailTab) {
   detailError.value = "";
   try {
     const params = detailParams();
+    let payload: ColumnInfo[] | IndexInfo[] | ForeignKeyInfo[];
     if (tab === "columns") {
-      columns.value = await apiGetJson<ColumnInfo[]>(props.baseUrl, "/api/mobile/schema/columns", props.token, params);
+      payload = await loadDirectMetadata<ColumnInfo[]>("columns", params);
     } else if (tab === "indexes") {
-      indexes.value = await apiGetJson<IndexInfo[]>(props.baseUrl, "/api/mobile/schema/indexes", props.token, params);
-    } else if (tab === "foreignKeys") {
-      foreignKeys.value = await apiGetJson<ForeignKeyInfo[]>(props.baseUrl, "/api/mobile/schema/foreign-keys", props.token, params);
-    } else if (tab === "constraints") {
-      constraints.value = await apiGetJson<ConstraintInfo[]>(props.baseUrl, "/api/mobile/schema/constraints", props.token, params);
-    } else if (tab === "triggers") {
-      triggers.value = await apiGetJson<TriggerInfo[]>(props.baseUrl, "/api/mobile/schema/triggers", props.token, params);
-    } else if (tab === "partitions") {
-      partitions.value = await apiGetJson<PartitionInfo[]>(props.baseUrl, "/api/mobile/schema/partitions", props.token, params);
-    } else if (tab === "subpartitions") {
-      subpartitions.value = await apiGetJson<SubpartitionInfo[]>(props.baseUrl, "/api/mobile/schema/subpartitions", props.token, params);
+      payload = await loadDirectMetadata<IndexInfo[]>("indexes", params);
     } else {
-      const upperType = selectedTable.value.table_type.toUpperCase();
-      definition.value = await apiGetJson<string>(props.baseUrl, "/api/mobile/schema/ddl", props.token, {
-        ...params,
-        object_type: upperType.includes("MATERIALIZED") ? "MATERIALIZED_VIEW" : upperType.includes("VIEW") ? "VIEW" : undefined,
-      });
+      payload = await loadDirectMetadata<ForeignKeyInfo[]>("foreign-keys", params);
     }
+    if (requestId !== detailRequestId || detailTab.value !== tab) return;
+    if (tab === "columns") columns.value = payload as ColumnInfo[];
+    else if (tab === "indexes") indexes.value = payload as IndexInfo[];
+    else foreignKeys.value = payload as ForeignKeyInfo[];
     detailLoaded.value = { ...detailLoaded.value, [tab]: true };
   } catch (error) {
-    if (error instanceof ApiError && error.status === 401) emit("authExpired");
-    else if (requestId === detailRequestId) {
+    if (requestId === detailRequestId) {
       detailError.value = error instanceof Error ? error.message : "对象元数据加载失败";
     }
   } finally {
     if (requestId === detailRequestId) detailLoading.value = false;
   }
-}
-
-async function openRoutine(routine: DatabaseObjectInfo) {
-  if (!selectedConnection.value) return;
-  selectedRoutine.value = routine;
-  routineSource.value = null;
-  level.value = "routine";
-  await runLoad(async () => {
-    routineSource.value = await apiGetJson<ObjectSource>(props.baseUrl, "/api/mobile/schema/object-source", props.token, {
-      connection_id: selectedConnection.value?.id,
-      database: selectedDatabase.value,
-      schema: routine.schema || selectedSchema.value,
-      table: routine.name,
-      object_type: routine.object_type.toUpperCase(),
-      signature: routine.signature || undefined,
-    });
-  });
 }
 
 function mobileTarget(table: TableInfo): MobileTableTarget | null {
@@ -581,11 +430,6 @@ function executeRoutineSql(routine: DatabaseObjectInfo) {
   openManagementSql(routine.object_type === "PROCEDURE" ? `CALL ${target}();` : `SELECT ${target}();`);
 }
 
-function editRoutineSql() {
-  if (!routineSource.value?.source) return;
-  openManagementSql(routineSource.value.source);
-}
-
 function openTableData(table: TableInfo) {
   const target = mobileTarget(table);
   if (!target || !supportsTableBrowsing.value) return;
@@ -603,8 +447,8 @@ async function openTableQuery(table: TableInfo) {
   actionTable.value = table.name;
   errorMessage.value = "";
   try {
-    const response = await apiPostJson<MobileTableTemplateResponse>(props.baseUrl, "/api/mobile/table-template", props.token, { ...target, offset: 0, limit: 30 }, { timeoutMs: 12_000 });
-    if (requestId === tableActionRequestId) emit("openQuery", { ...target, sql: response.sql });
+    const sql = await buildDirectTableTemplate({ ...target, offset: 0, limit: 30 });
+    if (requestId === tableActionRequestId) emit("openQuery", { ...target, sql });
   } catch (error) {
     if (requestId === tableActionRequestId) handleError(error, () => openTableQuery(table));
   } finally {
@@ -627,10 +471,6 @@ function goBack() {
   } else if (level.value === "details") {
     level.value = "tables";
     selectedTable.value = null;
-  } else if (level.value === "routine") {
-    level.value = "tables";
-    selectedRoutine.value = null;
-    routineSource.value = null;
   } else if (level.value === "tables") {
     if (schemas.value.length > 0) {
       level.value = "schemas";
@@ -660,7 +500,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="metadata-browser">
-    <TableDataBrowser v-if="level === 'data' && tableTarget" :base-url="baseUrl" :target="tableTarget" :token="token" @auth-expired="emit('authExpired')" @back="goBack" @open-query="openGeneratedQuery" />
+    <TableDataBrowser v-if="level === 'data' && tableTarget" :target="tableTarget" @back="goBack" @open-query="openGeneratedQuery" />
     <template v-else>
       <div v-if="level !== 'connections'" class="browser-toolbar">
         <button type="button" aria-label="返回上一级" @click="goBack">←</button>
@@ -728,23 +568,6 @@ onBeforeUnmount(() => {
             <button type="button" @click="renameSchemaSql">RENAME SCHEMA</button>
             <button class="danger" type="button" @click="dropSchemaSql">DROP SCHEMA SQL</button>
           </div>
-          <form class="object-search" @submit.prevent="searchDatabaseObjects">
-            <input v-model="objectSearch" type="search" placeholder="跨 Schema 搜索对象名称" />
-            <button :disabled="objectSearching || !objectSearch.trim()" type="submit">
-              {{ objectSearching ? "搜索中" : "全局搜索" }}
-            </button>
-          </form>
-          <div v-if="objectSearchResults.length" class="search-results">
-            <button
-              v-for="item in objectSearchResults"
-              :key="`${item.schema || ''}:${item.object_type}:${item.name}:${item.signature || ''}`"
-              type="button"
-              @click="openSearchedObject(item)"
-            >
-              <small>{{ item.object_type }} · {{ item.schema || "DEFAULT" }}</small>
-              <strong>{{ item.name }}</strong>
-            </button>
-          </div>
           <div class="administration-actions">
             <span>数据库运维</span>
             <button type="button" @click="openAdministrationSql('users')">用户</button>
@@ -758,11 +581,6 @@ onBeforeUnmount(() => {
             <button :class="{ active: schemaSection === 'routines' }" type="button" @click="selectSchemaSection('routines')">
               函数 / 过程 <b>{{ routinesLoaded ? routines.length : "—" }}</b>
             </button>
-            <button :class="{ active: schemaSection === 'sequences' }" type="button" @click="selectSchemaSection('sequences')">序列</button>
-            <button :class="{ active: schemaSection === 'rules' }" type="button" @click="selectSchemaSection('rules')">规则</button>
-            <button :class="{ active: schemaSection === 'extensions' }" type="button" @click="selectSchemaSection('extensions')">扩展</button>
-            <button :class="{ active: schemaSection === 'statistics' }" type="button" @click="selectSchemaSection('statistics')">统计</button>
-            <button :class="{ active: schemaSection === 'owners' }" type="button" @click="selectSchemaSection('owners')">Owner</button>
           </div>
           <div v-if="schemaSection === 'relations'" class="browser-list">
             <article v-for="table in tables" :key="`${table.parent_schema || ''}:${table.name}`" class="table-row">
@@ -784,73 +602,23 @@ onBeforeUnmount(() => {
               </div>
             </article>
             <div v-if="tables.length === 0" class="browser-state"><strong>没有可见表或视图</strong></div>
-            <p v-if="!supportsTableBrowsing && tables.length" class="preview-note">数据预览当前支持 PostgreSQL、MySQL、SQL Server、Oracle、SQLite 和 ClickHouse；元数据浏览仍可使用。</p>
+            <p v-if="!supportsTableBrowsing && tables.length" class="preview-note">数据预览当前支持 PostgreSQL、MySQL 和 SQL Server；元数据浏览仍可使用。</p>
             <button v-if="hasMoreTables" class="load-more" :disabled="loadingMore" type="button" @click="loadMoreTables">
               {{ loadingMore ? "正在加载" : `继续加载（已显示 ${tables.length}）` }}
             </button>
           </div>
           <div v-else-if="schemaSection === 'routines'" class="browser-list">
-            <button v-for="routine in routines" :key="`${routine.object_type}:${routine.name}:${routine.signature || ''}`" class="browser-row" type="button" @click="openRoutine(routine)">
+            <button v-for="routine in routines" :key="`${routine.object_type}:${routine.name}:${routine.signature || ''}`" class="browser-row" type="button" @click="executeRoutineSql(routine)">
               <span class="object-icon">{{ routine.object_type === "PROCEDURE" ? "PR" : "FN" }}</span>
               <span>
                 <small>{{ routine.object_type }}</small>
                 <strong>{{ routine.name }}</strong>
-                <p>{{ routine.signature || routine.comment || "查看对象定义" }}</p>
+                <p>{{ routine.signature || routine.comment || "生成执行 SQL" }}</p>
               </span>
               <b>›</b>
             </button>
             <div v-if="routines.length === 0" class="browser-state"><strong>没有可见函数或存储过程</strong></div>
           </div>
-          <div v-else-if="schemaSection === 'sequences'" class="browser-list">
-            <article v-for="item in sequences" :key="item.name" class="metadata-card">
-              <header><strong>{{ item.name }}</strong><span><em>{{ item.data_type }}</em></span></header>
-              <code>START {{ item.start_value }} · INCREMENT {{ item.increment }}</code>
-              <p>MIN {{ item.min_value }} · MAX {{ item.max_value }} · {{ item.cycle ? "CYCLE" : "NO CYCLE" }}</p>
-              <p v-if="item.last_value != null">LAST VALUE {{ item.last_value }}</p>
-            </article>
-            <div v-if="sequences.length === 0" class="browser-state"><strong>当前数据库不支持序列或没有可见序列</strong></div>
-          </div>
-          <div v-else-if="schemaSection === 'rules'" class="browser-list">
-            <article v-for="item in rules" :key="item.name" class="metadata-card">
-              <header><strong>{{ item.name }}</strong><span><em>{{ item.table_name }}</em></span></header>
-              <pre>{{ item.definition }}</pre>
-            </article>
-            <div v-if="rules.length === 0" class="browser-state"><strong>当前数据库不支持规则或没有可见规则</strong></div>
-          </div>
-          <div v-else-if="schemaSection === 'extensions'" class="browser-list">
-            <article v-for="item in extensions" :key="item.name" class="metadata-card">
-              <header><strong>{{ item.name }}</strong><span><em>{{ item.version }}</em></span></header>
-              <code v-if="item.schema">{{ item.schema }}</code><p v-if="item.comment">{{ item.comment }}</p>
-            </article>
-            <div v-if="extensions.length === 0" class="browser-state"><strong>当前数据库不支持扩展或没有已安装扩展</strong></div>
-          </div>
-          <div v-else-if="schemaSection === 'statistics'" class="browser-list">
-            <article v-for="item in statistics" :key="`${item.schema || ''}:${item.name}`" class="metadata-card">
-              <header><strong>{{ item.name }}</strong><span><em>{{ item.schema || selectedSchema }}</em></span></header>
-              <code>{{ item.estimated_rows ?? "—" }} ROWS</code><p>{{ item.total_bytes == null ? "大小未知" : `${item.total_bytes.toLocaleString()} BYTES` }}</p>
-            </article>
-            <div v-if="statistics.length === 0" class="browser-state"><strong>没有可见对象统计</strong></div>
-          </div>
-          <div v-else class="browser-list">
-            <article v-for="item in owners" :key="`${item.object_type}:${item.object_name}`" class="metadata-card">
-              <header><strong>{{ item.object_name }}</strong><span><em>{{ item.object_type }}</em></span></header>
-              <code>OWNER {{ item.owner }}</code>
-            </article>
-            <div v-if="owners.length === 0" class="browser-state"><strong>没有可见 Owner 信息</strong></div>
-          </div>
-        </div>
-
-        <div v-else-if="level === 'routine'" class="source-view">
-          <div class="source-meta">
-            <span>{{ selectedRoutine?.object_type }}</span>
-            <strong>{{ selectedRoutine?.name }}</strong>
-            <small>{{ selectedRoutine?.signature }}</small>
-          </div>
-          <div v-if="selectedRoutine" class="routine-actions">
-            <button type="button" @click="executeRoutineSql(selectedRoutine)">生成执行 SQL</button>
-            <button :disabled="!routineSource?.source" type="button" @click="editRoutineSql">在高级工作台编辑源码</button>
-          </div>
-          <pre>{{ routineSource?.source || "没有可见定义" }}</pre>
         </div>
 
         <div v-else-if="level === 'details'" class="column-list">
@@ -869,11 +637,6 @@ onBeforeUnmount(() => {
                 ['columns', '字段'],
                 ['indexes', '索引'],
                 ['foreignKeys', '外键'],
-                ['constraints', '约束'],
-                ['triggers', '触发器'],
-                ['partitions', '分区'],
-                ['subpartitions', '子分区'],
-                ['definition', selectedTable?.table_type.toUpperCase().includes('VIEW') ? '视图定义' : 'DDL'],
               ] as [DetailTab, string][]"
               :key="tab[0]"
               :class="{ active: detailTab === tab[0] }"
@@ -930,52 +693,6 @@ onBeforeUnmount(() => {
             </article>
             <div v-if="foreignKeys.length === 0" class="browser-state"><strong>没有可见外键</strong></div>
           </template>
-          <template v-else-if="detailTab === 'constraints'">
-            <article v-for="constraint in constraints" :key="constraint.name" class="metadata-card">
-              <header>
-                <strong>{{ constraint.name }}</strong
-                ><span
-                  ><em>{{ constraint.constraint_type }}</em></span
-                >
-              </header>
-              <code v-if="constraint.columns.length">{{ constraint.columns.join(", ") }}</code>
-              <pre>{{ constraint.definition }}</pre>
-              <p>{{ constraint.enabled ? "ENABLED" : "DISABLED" }} · {{ constraint.valid ? "VALID" : "INVALID" }}<template v-if="constraint.deferrable"> · DEFERRABLE</template></p>
-              <button class="inline-danger" type="button" @click="dropConstraintSql(constraint.name)">删除约束 SQL</button>
-            </article>
-            <div v-if="constraints.length === 0" class="browser-state"><strong>没有可见约束</strong></div>
-          </template>
-          <template v-else-if="detailTab === 'triggers'">
-            <article v-for="trigger in triggers" :key="trigger.name" class="metadata-card">
-              <header>
-                <strong>{{ trigger.name }}</strong
-                ><span
-                  ><em>{{ trigger.timing }}</em
-                  ><em>{{ trigger.event }}</em></span
-                >
-              </header>
-              <pre v-if="trigger.statement">{{ trigger.statement }}</pre>
-            </article>
-            <div v-if="triggers.length === 0" class="browser-state"><strong>没有可见触发器</strong></div>
-          </template>
-          <template v-else-if="detailTab === 'partitions'">
-            <article v-for="item in partitions" :key="item.name" class="metadata-card">
-              <header><strong>{{ item.name }}</strong><span><em>#{{ item.position }}</em><em>{{ item.partition_type }}</em></span></header>
-              <code>{{ item.partition_key }}</code><pre>{{ item.value }}</pre>
-              <p v-if="item.online != null">{{ item.online ? "ONLINE" : "OFFLINE" }}</p>
-            </article>
-            <div v-if="partitions.length === 0" class="browser-state"><strong>没有分区或当前数据库不支持分区元数据</strong></div>
-          </template>
-          <template v-else-if="detailTab === 'subpartitions'">
-            <article v-for="item in subpartitions" :key="item.name" class="metadata-card">
-              <header><strong>{{ item.name }}</strong><span><em>#{{ item.position }}</em><em>{{ item.partition_type }}</em></span></header>
-              <code>{{ item.partition_key }}</code><pre>{{ item.value }}</pre>
-            </article>
-            <div v-if="subpartitions.length === 0" class="browser-state"><strong>没有子分区或当前数据库不支持子分区元数据</strong></div>
-          </template>
-          <div v-else class="source-view">
-            <pre>{{ definition || "没有可见定义" }}</pre>
-          </div>
         </div>
       </template>
     </template>
@@ -1026,14 +743,12 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 8px;
 }
-.schema-management-actions,
-.routine-actions {
+.schema-management-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   border: 1px solid var(--line);
 }
 .schema-management-actions button,
-.routine-actions button,
 .management-action {
   min-height: 40px;
   border: 0;
@@ -1045,9 +760,6 @@ onBeforeUnmount(() => {
 }
 .management-action {
   border: 1px solid var(--line);
-}
-.routine-actions {
-  margin-top: 8px;
 }
 .object-tabs,
 .detail-tabs {
@@ -1370,8 +1082,7 @@ onBeforeUnmount(() => {
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
-.metadata-card pre,
-.source-view pre {
+.metadata-card pre {
   overflow: auto;
   max-height: 58dvh;
   margin: 9px 0 0;
@@ -1385,52 +1096,6 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.source-view {
-  min-width: 0;
-}
-.source-meta {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 7px 10px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  padding: 12px;
-}
-.source-meta span {
-  color: var(--acid);
-  font-size: 8px;
-}
-.source-meta strong {
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.source-meta small {
-  grid-column: 1 / -1;
-  color: var(--muted);
-  font-size: 8px;
-  overflow-wrap: anywhere;
-}
-.object-search {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  border: 1px solid var(--line);
-  border-top: 0;
-  background: #0a0d0b;
-}
-.object-search input {
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  padding: 11px;
-  color: var(--ink);
-  font: inherit;
-  font-size: 9px;
-}
-.object-search button,
 .administration-actions button,
 .inline-danger {
   border: 0;
@@ -1439,42 +1104,6 @@ onBeforeUnmount(() => {
   color: var(--acid);
   font: inherit;
   font-size: 8px;
-}
-.object-search button {
-  border-left: 1px solid var(--line);
-}
-.search-results {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  max-height: 210px;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-top: 0;
-}
-.search-results button {
-  min-width: 0;
-  border: 0;
-  border-right: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
-  padding: 10px;
-  color: var(--ink);
-  text-align: left;
-}
-.search-results small,
-.search-results strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.search-results small {
-  color: var(--muted);
-  font-size: 7px;
-}
-.search-results strong {
-  margin-top: 5px;
-  font-size: 9px;
 }
 .administration-actions {
   display: grid;

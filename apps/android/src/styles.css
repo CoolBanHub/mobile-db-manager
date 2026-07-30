@@ -602,10 +602,6 @@ button {
   line-height: 1.7;
 }
 
-.settings-list {
-  margin-top: 16px;
-}
-
 .settings-stack {
   display: grid;
   gap: 12px;
@@ -617,125 +613,6 @@ button {
   border-top: 2px solid var(--acid);
   background: var(--panel);
   padding: 17px;
-}
-
-.settings-card label:not(.secure-toggle) {
-  display: block;
-  margin-top: 13px;
-}
-
-.settings-card label > span {
-  display: block;
-  margin-bottom: 7px;
-  color: var(--muted);
-  font-size: 9px;
-}
-
-.settings-card input:not([type="checkbox"]),
-.settings-card select {
-  width: 100%;
-  min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 0;
-  outline: 0;
-  background: #080a09;
-  padding: 0 11px;
-  color: var(--ink);
-  font-size: 11px;
-}
-
-.settings-card .secure-toggle {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-  border: 1px solid var(--line);
-  padding: 12px;
-}
-
-.secure-toggle input {
-  accent-color: var(--acid);
-}
-.secure-toggle span {
-  margin: 0 !important;
-}
-.secure-toggle b,
-.secure-toggle small {
-  display: block;
-}
-.secure-toggle b {
-  color: var(--ink);
-  font-size: 10px;
-}
-.secure-toggle small {
-  margin-top: 5px;
-  color: var(--muted);
-  font-family: "PingFang SC", sans-serif;
-  font-size: 9px;
-}
-.settings-card .network-field-hint {
-  display: block;
-  margin-top: 6px;
-  color: var(--muted);
-  font-family: "PingFang SC", sans-serif;
-  font-size: 9px;
-  line-height: 1.5;
-}
-.settings-card .danger-toggle {
-  border-color: rgba(255, 187, 61, 0.28);
-  background: rgba(255, 187, 61, 0.045);
-}
-.settings-card .danger-toggle input {
-  accent-color: var(--amber);
-}
-.settings-card .danger-toggle b {
-  color: var(--amber);
-}
-.settings-list .danger-setting i {
-  color: var(--danger);
-}
-
-.settings-list {
-  display: grid;
-  gap: 10px;
-}
-
-.settings-list button {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  padding: 17px;
-  text-align: left;
-}
-
-.settings-list button:disabled {
-  cursor: wait;
-  opacity: 0.55;
-}
-
-.settings-list b,
-.settings-list small {
-  display: block;
-}
-
-.settings-list b {
-  font-size: 12px;
-}
-
-.settings-list small {
-  margin-top: 6px;
-  color: var(--muted);
-  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-size: 10px;
-}
-
-.settings-list i {
-  color: var(--acid);
-  font-size: 18px;
-  font-style: normal;
 }
 
 .bottom-nav {
@@ -845,7 +722,6 @@ button {
 .login-card,
 .status-panel,
 .settings-card,
-.settings-list button,
 .saved-server-list button {
   box-shadow: 0 12px 34px rgba(23, 32, 51, 0.055);
 }
@@ -916,7 +792,6 @@ button {
   .unsupported-browser,
   .object-tabs,
   .detail-tabs,
-  .object-search,
   .document-card,
   .data-scroll,
   .cell-sheet
@@ -962,7 +837,6 @@ button {
   .filter-builder input,
   footer select,
   .metadata-card pre,
-  .source-view pre,
   .value-view pre,
   .console-stage article pre,
   .console-stage > form
@@ -974,7 +848,6 @@ button {
 
 .editor textarea,
 .metadata-card pre,
-.source-view pre,
 .document-card code,
 .value-view pre,
 .console-stage article pre {

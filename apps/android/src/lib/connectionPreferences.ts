@@ -10,10 +10,6 @@ const STORAGE_KEY = "dbx-mobile.connection-preferences.v1";
 
 type PreferenceMap = Record<string, ConnectionPreference>;
 
-function key(serverId: string, connectionId: string): string {
-  return `${serverId}:${connectionId}`;
-}
-
 function load(storage: Pick<Storage, "getItem"> = localStorage): PreferenceMap {
   try {
     const value = JSON.parse(storage.getItem(STORAGE_KEY) ?? "{}") as PreferenceMap;
@@ -24,13 +20,12 @@ function load(storage: Pick<Storage, "getItem"> = localStorage): PreferenceMap {
 }
 
 export function getConnectionPreference(
-  serverId: string,
   connectionId: string,
   isProduction: boolean,
   storage: Pick<Storage, "getItem"> = localStorage,
 ): ConnectionPreference {
   return (
-    load(storage)[key(serverId, connectionId)] ?? {
+    load(storage)[connectionId] ?? {
       group: "未分组",
       favorite: false,
       environment: isProduction ? "production" : "development",
@@ -39,22 +34,20 @@ export function getConnectionPreference(
 }
 
 export function saveConnectionPreference(
-  serverId: string,
   connectionId: string,
   preference: ConnectionPreference,
   storage: Pick<Storage, "getItem" | "setItem"> = localStorage,
 ): void {
   const values = load(storage);
-  values[key(serverId, connectionId)] = preference;
+  values[connectionId] = preference;
   storage.setItem(STORAGE_KEY, JSON.stringify(values));
 }
 
 export function removeConnectionPreference(
-  serverId: string,
   connectionId: string,
   storage: Pick<Storage, "getItem" | "setItem"> = localStorage,
 ): void {
   const values = load(storage);
-  delete values[key(serverId, connectionId)];
+  delete values[connectionId];
   storage.setItem(STORAGE_KEY, JSON.stringify(values));
 }

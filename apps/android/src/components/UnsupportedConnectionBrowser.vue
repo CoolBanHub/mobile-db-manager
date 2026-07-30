@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MobileConnectionSummary } from "../lib/mobileApi";
+import type { MobileConnectionSummary } from "../lib/mobileTypes";
 import { databaseCapability } from "../lib/databaseCapabilities";
 
 const props = defineProps<{ connection: MobileConnectionSummary }>();

@@ -1,4 +1,4 @@
-import type { ColumnInfo, TableInfo } from "./mobileApi";
+import type { ColumnInfo, TableInfo } from "./mobileTypes";
 
 export interface SqlSuggestion {
   label: string;

@@ -8,8 +8,6 @@
     "dev": "vite --config apps/desktop/vite.config.ts",
     "dev:tauri": "tauri dev",
     "dev:web": "vite --config apps/desktop/vite.config.ts --port 5173 --mode web",
-    "dev:android": "pnpm --filter @dbx-app/android dev",
-    "build:android:web": "pnpm --filter @dbx-app/android build",
     "android:sync": "pnpm --filter @dbx-app/android sync",
     "android:open": "pnpm --filter @dbx-app/android open",
     "android:build:debug": "pnpm --filter @dbx-app/android android:build:debug",

@@ -1,25 +1,31 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
-  ApiError,
-  apiDeleteJson,
-  apiGetJson,
-  apiPostJson,
-  type MobileConnectionSummary,
-  type MobileHistoryCursor,
-  type MobileHistoryEntry,
-  type MobileHistoryPage,
-  type MobileQueryDraft,
-  type SavedSqlFolder,
-  type SavedSqlFile,
-  type SavedSqlLibrary,
-} from "../lib/mobileApi";
+  clearDirectHistory,
+  deleteDirectHistoryEntry,
+  deleteDirectSavedSql,
+  deleteDirectSavedSqlFolder,
+  loadDirectSavedSql,
+  loadDirectSavedSqlLibrary,
+  saveDirectSavedSql,
+  saveDirectSavedSqlFolder,
+  searchDirectHistory,
+} from "../lib/directDatabase";
+import type {
+  MobileConnectionSummary,
+  MobileHistoryCursor,
+  MobileHistoryEntry,
+  MobileHistoryPage,
+  MobileQueryDraft,
+  SavedSqlFolder,
+  SavedSqlFile,
+  SavedSqlLibrary,
+} from "../lib/mobileTypes";
 
 const PAGE_SIZE = 20;
-const SYNC_INTERVAL_MS = 15_000;
 
-const props = defineProps<{ baseUrl: string; token: string | null; connections: MobileConnectionSummary[] }>();
-const emit = defineEmits<{ authExpired: []; openQuery: [draft: Omit<MobileQueryDraft, "nonce">] }>();
+const props = defineProps<{ connections: MobileConnectionSummary[] }>();
+const emit = defineEmits<{ openQuery: [draft: Omit<MobileQueryDraft, "nonce">] }>();
 const mode = ref<"history" | "saved">("history");
 const history = ref<MobileHistoryEntry[]>([]);
 const library = ref<SavedSqlLibrary>({ folders: [], files: [] });
@@ -43,7 +49,6 @@ const manageConnectionId = ref("");
 const manageTargetFolderId = ref("");
 const detail = ref<MobileHistoryEntry | null>(null);
 const lastSyncedAt = ref<Date | null>(null);
-let pollTimer: number | undefined;
 let searchTimer: number | undefined;
 let requestVersion = 0;
 
@@ -118,8 +123,8 @@ const activeFilterCount = computed(
 );
 const syncLabel = computed(() =>
   lastSyncedAt.value
-    ? `已同步 ${lastSyncedAt.value.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-    : "等待同步",
+    ? `已刷新 ${lastSyncedAt.value.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+    : "刷新",
 );
 const manageTitle = computed(() => {
   return {
@@ -132,8 +137,7 @@ const manageTitle = computed(() => {
 });
 
 function fail(reason: unknown) {
-  if (reason instanceof ApiError && reason.status === 401) emit("authExpired");
-  else error.value = reason instanceof Error ? reason.message : "请求失败";
+  error.value = reason instanceof Error ? reason.message : "请求失败";
 }
 
 function hasConnection(id: string) {
@@ -159,13 +163,7 @@ function historyRequest(cursor: MobileHistoryCursor | null) {
 }
 
 async function fetchHistoryPage(cursor: MobileHistoryCursor | null) {
-  return apiPostJson<MobileHistoryPage>(
-    props.baseUrl,
-    "/api/mobile/history/search",
-    props.token,
-    historyRequest(cursor),
-    { timeoutMs: 8_000 },
-  );
+  return searchDirectHistory(historyRequest(cursor));
 }
 
 async function refreshHistory(options: { silent?: boolean; preserveDepth?: boolean } = {}) {
@@ -220,7 +218,7 @@ async function loadMore() {
 }
 
 async function loadSavedLibrary() {
-  library.value = await apiGetJson<SavedSqlLibrary>(props.baseUrl, "/api/mobile/saved-sql", props.token, {});
+  library.value = loadDirectSavedSqlLibrary();
   if (currentFolderId.value && !library.value.folders.some((folder) => folder.id === currentFolderId.value)) {
     currentFolderId.value = null;
   }
@@ -284,20 +282,14 @@ async function saveHistory(item: MobileHistoryEntry) {
   busyId.value = item.id;
   error.value = "";
   try {
-    const saved = await apiPostJson<SavedSqlFile>(
-      props.baseUrl,
-      "/api/mobile/saved-sql",
-      props.token,
-      {
+    const saved = saveDirectSavedSql({
         connectionId: item.connectionId,
         folderId: null,
         database: item.database,
         schema: item.schema,
         name: `查询 ${new Date(item.executedAt).toLocaleString()}`,
         sql: item.sql,
-      },
-      { timeoutMs: 8_000 },
-    );
+    });
     library.value.files = [...library.value.files.filter((file) => file.id !== saved.id), saved];
     mode.value = "saved";
     detail.value = null;
@@ -309,11 +301,11 @@ async function saveHistory(item: MobileHistoryEntry) {
 }
 
 async function removeHistory(item: MobileHistoryEntry) {
-  if (!window.confirm("删除这条查询历史？其他设备也会同步删除。")) return;
+  if (!window.confirm("删除这条本机查询历史？")) return;
   busyId.value = item.id;
   error.value = "";
   try {
-    await apiDeleteJson<null>(props.baseUrl, `/api/mobile/history/${encodeURIComponent(item.id)}`, props.token);
+    deleteDirectHistoryEntry(item.id);
     history.value = history.value.filter((entry) => entry.id !== item.id);
     total.value = Math.max(0, total.value - 1);
     if (detail.value?.id === item.id) detail.value = null;
@@ -325,11 +317,11 @@ async function removeHistory(item: MobileHistoryEntry) {
 }
 
 async function clearHistory() {
-  if (!window.confirm("清空全部查询历史？此操作会同步到所有设备且无法撤销。")) return;
+  if (!window.confirm("清空全部本机查询历史？此操作无法撤销。")) return;
   busyId.value = "clear-history";
   error.value = "";
   try {
-    await apiDeleteJson<null>(props.baseUrl, "/api/mobile/history", props.token);
+    clearDirectHistory();
     history.value = [];
     nextCursor.value = null;
     total.value = 0;
@@ -346,12 +338,7 @@ async function openSaved(item: SavedSqlFile) {
   busyId.value = item.id;
   error.value = "";
   try {
-    const loaded = await apiGetJson<SavedSqlFile | null>(
-      props.baseUrl,
-      `/api/mobile/saved-sql/${encodeURIComponent(item.id)}`,
-      props.token,
-      {},
-    );
+    const loaded = loadDirectSavedSql(item.id);
     if (!loaded) throw new Error("保存的 SQL 已不存在");
     emit("openQuery", {
       connectionId: loaded.connectionId,
@@ -432,20 +419,14 @@ function closeManage() {
 }
 
 async function saveFileMetadata(item: SavedSqlFile, changes: { name?: string; folderId?: string | null }) {
-  return apiPostJson<SavedSqlFile>(
-    props.baseUrl,
-    "/api/mobile/saved-sql",
-    props.token,
-    {
+  return saveDirectSavedSql({
       id: item.id,
       connectionId: item.connectionId,
       folderId: changes.folderId === undefined ? item.folderId : changes.folderId,
       database: item.database,
       schema: item.schema,
       name: changes.name ?? item.name,
-    },
-    { timeoutMs: 8_000 },
-  );
+  });
 }
 
 async function submitManage() {
@@ -463,11 +444,7 @@ async function submitManage() {
       library.value.files = library.value.files.map((file) => (file.id === saved.id ? saved : file));
     } else {
       const existing = manageFolder.value;
-      const folder = await apiPostJson<SavedSqlFolder>(
-        props.baseUrl,
-        "/api/mobile/saved-sql/folders",
-        props.token,
-        {
+      const folder = saveDirectSavedSqlFolder({
           id: existing?.id,
           connectionId: manageConnectionId.value,
           parentFolderId:
@@ -477,9 +454,7 @@ async function submitManage() {
                 ? manageTargetFolderId.value || null
                 : existing?.parentFolderId ?? null,
           name: action === "rename-folder" || action === "new-folder" ? manageName.value.trim() : existing?.name,
-        },
-        { timeoutMs: 8_000 },
-      );
+      });
       library.value.folders = [...library.value.folders.filter((item) => item.id !== folder.id), folder];
     }
     closeManage();
@@ -495,25 +470,11 @@ async function removeFolder(item: SavedSqlFolder) {
   busyId.value = item.id;
   error.value = "";
   try {
-    await apiDeleteJson<null>(
-      props.baseUrl,
-      `/api/mobile/saved-sql/folders/${encodeURIComponent(item.id)}`,
-      props.token,
-    );
-    const removed = new Set([item.id]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const folder of library.value.folders) {
-        if (folder.parentFolderId && removed.has(folder.parentFolderId) && !removed.has(folder.id)) {
-          removed.add(folder.id);
-          changed = true;
-        }
-      }
+    deleteDirectSavedSqlFolder(item.id);
+    library.value = loadDirectSavedSqlLibrary();
+    if (currentFolderId.value && !library.value.folders.some((folder) => folder.id === currentFolderId.value)) {
+      currentFolderId.value = null;
     }
-    library.value.folders = library.value.folders.filter((folder) => !removed.has(folder.id));
-    library.value.files = library.value.files.filter((file) => !file.folderId || !removed.has(file.folderId));
-    if (currentFolderId.value && removed.has(currentFolderId.value)) currentFolderId.value = null;
   } catch (reason) {
     fail(reason);
   } finally {
@@ -527,7 +488,7 @@ async function removeSaved(item: SavedSqlFile) {
   busyId.value = item.id;
   error.value = "";
   try {
-    await apiDeleteJson<null>(props.baseUrl, `/api/mobile/saved-sql/${encodeURIComponent(item.id)}`, props.token);
+    deleteDirectSavedSql(item.id);
     library.value.files = library.value.files.filter((file) => file.id !== item.id);
   } catch (reason) {
     fail(reason);
@@ -541,25 +502,13 @@ function formatTime(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-function handleVisibility() {
-  if (document.visibilityState === "visible") void refreshHistory({ silent: true, preserveDepth: true });
-}
-
 onMounted(() => {
   void load();
-  pollTimer = window.setInterval(() => {
-    if (document.visibilityState === "visible" && mode.value === "history") {
-      void refreshHistory({ silent: true, preserveDepth: true });
-    }
-  }, SYNC_INTERVAL_MS);
-  document.addEventListener("visibilitychange", handleVisibility);
 });
 
 onBeforeUnmount(() => {
   ++requestVersion;
-  window.clearInterval(pollTimer);
   window.clearTimeout(searchTimer);
-  document.removeEventListener("visibilitychange", handleVisibility);
 });
 </script>
 
@@ -578,7 +527,7 @@ onBeforeUnmount(() => {
         :placeholder="mode === 'history' ? '搜索连接、数据库或 SQL' : '搜索已保存 SQL'"
         @input="scheduleSearch"
       />
-      <button v-if="mode === 'history'" class="sync-button" type="button" aria-label="立即同步" @click="refreshHistory({ preserveDepth: true })">
+      <button v-if="mode === 'history'" class="sync-button" type="button" aria-label="立即刷新" @click="refreshHistory({ preserveDepth: true })">
         <span></span>{{ syncLabel }}
       </button>
     </div>
@@ -721,7 +670,7 @@ onBeforeUnmount(() => {
             class="primary"
             :disabled="busyId !== '' || !manageConnectionId || ((manageAction === 'new-folder' || manageAction.startsWith('rename-')) && !manageName.trim())"
             type="submit"
-          >{{ busyId ? "同步中…" : "确认" }}</button>
+          >{{ busyId ? "保存中…" : "确认" }}</button>
         </footer>
       </form>
     </div>

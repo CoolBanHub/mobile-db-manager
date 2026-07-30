@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ColumnInfo, TableInfo } from "./mobileApi";
+import type { ColumnInfo, TableInfo } from "./mobileTypes";
 import {
   applySqlSuggestion,
   buildColumnCondition,

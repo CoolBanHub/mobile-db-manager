@@ -1,21 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
-  ApiError,
-  apiFetch,
-  apiGetJson,
-  apiPostJson,
-  type ColumnInfo,
-  type DatabaseInfo,
-  type MobileConnectionSummary,
-  type MobileMultiQueryResult,
-  type MobileQueryDraft,
-  type MobileTransactionResponse,
-  type QueryResult,
-  type SavedSqlFile,
-  type TableInfo,
-} from "../lib/mobileApi";
-import { exportQueryResult, shareQueryExportText, type QueryExportFormat } from "../lib/queryExport";
+  cancelDirectQuery,
+  executeDirectQuery,
+  explainDirectQuery,
+  loadDirectMetadata,
+  saveDirectSavedSql,
+} from "../lib/directDatabase";
+import type {
+  ColumnInfo,
+  DatabaseInfo,
+  MobileConnectionSummary,
+  MobileQueryDraft,
+  QueryResult,
+  SavedSqlFile,
+  TableInfo,
+} from "../lib/mobileTypes";
+import { exportQueryResult, type QueryExportFormat } from "../lib/queryExport";
 import {
   applySqlSuggestion,
   buildColumnCondition,
@@ -27,15 +28,13 @@ import {
 } from "../lib/sqlEditor";
 import { parseSqlParameterJson, resolveSqlParameters } from "../lib/sqlParameters";
 
-type ExecutionMode = "safe" | "advanced" | "script" | "transaction";
+type ExecutionMode = "safe" | "advanced";
 
 const props = defineProps<{
-  baseUrl: string;
-  token: string | null;
   connections: MobileConnectionSummary[];
   draft?: MobileQueryDraft | null;
 }>();
-const emit = defineEmits<{ authExpired: []; draftConsumed: [] }>();
+const emit = defineEmits<{ draftConsumed: [] }>();
 const connectionId = ref("");
 const database = ref("");
 const schema = ref("");
@@ -52,14 +51,8 @@ const parameterJson = ref("");
 const showParameters = ref(false);
 const confirmedWrite = ref(false);
 const productionConfirmation = ref("");
-const continueOnError = ref(false);
-const transactionId = ref("");
-const resultSets = ref<MobileMultiQueryResult[]>([]);
-const activeResultIndex = ref(0);
 const explainResult = ref("");
 const explaining = ref(false);
-const aiPrompt = ref("");
-const aiRunning = ref(false);
 const showChart = ref(false);
 const cellEditValue = ref("");
 const pendingCellEdits = ref<Array<{ rowIndex: number; columnIndex: number; value: string }>>([]);
@@ -82,7 +75,6 @@ const savedSqlFolderId = ref<string | null>(null);
 const saving = ref(false);
 const saveStatus = ref("");
 const exporting = ref(false);
-const fullExporting = ref(false);
 const exportStatus = ref("");
 const exportFormat = ref<QueryExportFormat>("csv");
 const columnWidths = ref<Record<number, number>>({});
@@ -92,19 +84,18 @@ const selectedCell = ref<{
   columnIndex: number;
   value: unknown;
 } | null>(null);
-const SERVER_PAGE_SIZE = 50;
+const QUERY_PAGE_SIZE = 50;
 const TABLE_PAGE_SIZE = 100;
 let connectionRequestId = 0;
 let schemaRequestId = 0;
 let tableRequestId = 0;
 let queryRequestId = 0;
 let exportRequestId = 0;
-let queryController: AbortController | null = null;
 let activeExecutionId: string | null = null;
 let tableSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const selectedConnection = computed(() => props.connections.find((item) => item.id === connectionId.value));
-const resultPage = computed(() => Math.floor(resultOffset.value / SERVER_PAGE_SIZE) + 1);
+const resultPage = computed(() => Math.floor(resultOffset.value / QUERY_PAGE_SIZE) + 1);
 const advancedMode = computed(() => executionMode.value !== "safe");
 const writeAllowed = computed(() => selectedConnection.value && !selectedConnection.value.readOnly);
 const productionConfirmed = computed(
@@ -132,44 +123,22 @@ const hasMoreTables = computed(() =>
 );
 
 function fail(reason: unknown) {
-  if (reason instanceof ApiError && reason.status === 401) emit("authExpired");
-  else error.value = reason instanceof Error ? reason.message : "请求失败";
+  error.value = reason instanceof Error ? reason.message : "请求失败";
 }
 
 function createExecutionId() {
   return globalThis.crypto?.randomUUID?.() ?? `mobile-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function requestServerCancellation(executionId: string, keepalive = false) {
-  return apiFetch(props.baseUrl, `/api/mobile/query/${encodeURIComponent(executionId)}`, props.token, {
-    method: "DELETE",
-    headers: { Accept: "application/json" },
-    keepalive,
-  });
-}
-
 function invalidateQuery() {
   queryRequestId++;
   exportRequestId++;
-  if (activeExecutionId) void requestServerCancellation(activeExecutionId, true).catch(() => undefined);
-  if (transactionId.value) {
-    void apiFetch(
-      props.baseUrl,
-      `/api/mobile/transactions/${encodeURIComponent(transactionId.value)}`,
-      props.token,
-      { method: "DELETE" },
-    ).catch(() => undefined);
-    transactionId.value = "";
-  }
-  queryController?.abort();
-  queryController = null;
+  if (activeExecutionId) void cancelDirectQuery(activeExecutionId).catch(() => undefined);
   activeExecutionId = null;
   executing.value = false;
   cancelling.value = false;
   exporting.value = false;
   result.value = null;
-  resultSets.value = [];
-  activeResultIndex.value = 0;
   explainResult.value = "";
   exportStatus.value = "";
   resultOffset.value = 0;
@@ -181,15 +150,6 @@ function executableSql() {
   return resolveSqlParameters(sql.value, parseSqlParameterJson(parameterJson.value));
 }
 
-function selectResultSet(index: number) {
-  const next = resultSets.value[index];
-  if (!next) return;
-  activeResultIndex.value = index;
-  result.value = next;
-  resultOffset.value = 0;
-  selectedCell.value = null;
-}
-
 async function executeAdvanced() {
   const requestId = ++queryRequestId;
   const executionId = createExecutionId();
@@ -197,44 +157,20 @@ async function executeAdvanced() {
   executing.value = true;
   error.value = "";
   result.value = null;
-  resultSets.value = [];
   try {
     const resolvedSql = executableSql();
-    const response =
-      executionMode.value === "transaction" && transactionId.value
-        ? await apiPostJson<QueryResult[]>(
-            props.baseUrl,
-            `/api/mobile/transactions/${encodeURIComponent(transactionId.value)}`,
-            props.token,
-            {
-              connectionId: connectionId.value,
-              database: database.value,
-              schema: schema.value || null,
-              sql: resolvedSql,
-              confirmedWrite: confirmedWrite.value,
-              productionConfirmation: productionConfirmation.value || null,
-            },
-            { timeoutMs: 130_000 },
-          )
-        : await apiPostJson<MobileMultiQueryResult[]>(
-            props.baseUrl,
-            "/api/mobile/query/advanced",
-            props.token,
-            {
+    const response = await executeDirectQuery({
               connectionId: connectionId.value,
               database: database.value,
               schema: schema.value || null,
               sql: resolvedSql,
               executionId,
-              continueOnError: executionMode.value === "script" && continueOnError.value,
               confirmedWrite: confirmedWrite.value,
               productionConfirmation: productionConfirmation.value || null,
-            },
-            { timeoutMs: 130_000 },
-          );
+    }, false);
     if (requestId !== queryRequestId) return;
-    resultSets.value = response.map((item) => item as MobileMultiQueryResult);
-    selectResultSet(0);
+    result.value = response;
+    resultOffset.value = 0;
   } catch (reason) {
     if (requestId === queryRequestId) fail(reason);
   } finally {
@@ -245,96 +181,22 @@ async function executeAdvanced() {
   }
 }
 
-async function beginTransaction() {
-  if (!writeAllowed.value || !productionConfirmed.value) return;
-  error.value = "";
-  try {
-    const response = await apiPostJson<MobileTransactionResponse>(
-      props.baseUrl,
-      "/api/mobile/transactions",
-      props.token,
-      {
-        connectionId: connectionId.value,
-        database: database.value,
-        schema: schema.value || null,
-        productionConfirmation: productionConfirmation.value || null,
-      },
-      { timeoutMs: 15_000 },
-    );
-    transactionId.value = response.transactionId;
-    exportStatus.value = "手动事务已开始；5 分钟无操作将自动回滚";
-  } catch (reason) {
-    fail(reason);
-  }
-}
-
-async function finishTransaction(commit: boolean) {
-  if (!transactionId.value) return;
-  error.value = "";
-  try {
-    await apiFetch(
-      props.baseUrl,
-      `/api/mobile/transactions/${encodeURIComponent(transactionId.value)}`,
-      props.token,
-      { method: commit ? "PUT" : "DELETE", headers: { Accept: "application/json" } },
-    ).then(async (response) => {
-      if (!response.ok) throw new ApiError(await response.text(), response.status);
-    });
-    exportStatus.value = commit ? "事务已提交" : "事务已回滚";
-    transactionId.value = "";
-  } catch (reason) {
-    fail(reason);
-  }
-}
-
 async function explainQuery() {
   explaining.value = true;
   error.value = "";
   explainResult.value = "";
   try {
-    explainResult.value = await apiPostJson<string>(
-      props.baseUrl,
-      "/api/mobile/query/explain",
-      props.token,
-      {
+    explainResult.value = await explainDirectQuery({
         connectionId: connectionId.value,
         database: database.value,
         schema: schema.value || null,
         sql: executableSql(),
         mode: "explain",
-      },
-      { timeoutMs: 45_000 },
-    );
+    });
   } catch (reason) {
     fail(reason);
   } finally {
     explaining.value = false;
-  }
-}
-
-async function askAi() {
-  if (!aiPrompt.value.trim()) return;
-  aiRunning.value = true;
-  error.value = "";
-  try {
-    sql.value = await apiPostJson<string>(
-      props.baseUrl,
-      "/api/mobile/query/ai",
-      props.token,
-      {
-        prompt: aiPrompt.value,
-        connectionId: connectionId.value,
-        database: database.value,
-        schema: schema.value || null,
-        currentSql: sql.value,
-      },
-      { timeoutMs: 120_000 },
-    );
-    aiPrompt.value = "";
-  } catch (reason) {
-    fail(reason);
-  } finally {
-    aiRunning.value = false;
   }
 }
 
@@ -343,13 +205,18 @@ async function openSqlFile(event: Event) {
   const file = input.files?.[0];
   if (!file) return;
   if (file.size > 1024 * 1024) {
-    error.value = "移动端直接打开的 SQL 文件不能超过 1 MiB；更大的脚本请使用后台 SQL 文件执行";
+    error.value = "移动端直接打开的 SQL 文件不能超过 1 MiB";
     input.value = "";
     return;
   }
-  sql.value = await file.text();
-  executionMode.value = "script";
-  input.value = "";
+  try {
+    sql.value = await file.text();
+    executionMode.value = "advanced";
+  } catch (reason) {
+    error.value = reason instanceof Error ? `读取 SQL 文件失败：${reason.message}` : "读取 SQL 文件失败";
+  } finally {
+    input.value = "";
+  }
 }
 
 async function selectConnection(preferredDatabase?: string, preferredSchema?: string | null) {
@@ -375,8 +242,8 @@ async function selectConnection(preferredDatabase?: string, preferredSchema?: st
   loadingContext.value = true;
   error.value = "";
   try {
-    const response = await apiGetJson<DatabaseInfo[]>(props.baseUrl, "/api/mobile/schema/databases", props.token, {
-      connection_id: requestedConnectionId,
+    const response = await loadDirectMetadata<DatabaseInfo[]>("databases", {
+      connectionId: requestedConnectionId,
     });
     if (requestId !== connectionRequestId || connectionId.value !== requestedConnectionId) return;
     databases.value = response;
@@ -403,10 +270,9 @@ async function selectDatabase(preferredSchema?: string | null) {
   result.value = null;
   if (!requestedConnectionId || !requestedDatabase) return;
   try {
-    const response = await apiGetJson<string[]>(props.baseUrl, "/api/mobile/schema/schemas", props.token, {
-      connection_id: requestedConnectionId,
+    const response = await loadDirectMetadata<string[]>("schemas", {
+      connectionId: requestedConnectionId,
       database: requestedDatabase,
-      apply_visible_filter: "true",
     });
     if (
       requestId !== schemaRequestId ||
@@ -462,8 +328,8 @@ async function loadTables() {
 }
 
 function fetchTablePage(filter: string, offset: number) {
-  return apiGetJson<TableInfo[]>(props.baseUrl, "/api/mobile/schema/tables", props.token, {
-    connection_id: connectionId.value,
+  return loadDirectMetadata<TableInfo[]>("tables", {
+    connectionId: connectionId.value,
     database: database.value,
     schema: schema.value,
     filter: filter || undefined,
@@ -536,8 +402,8 @@ async function openTable(table: TableInfo) {
   columns.value = [];
   loadingMetadata.value = true;
   try {
-    columns.value = await apiGetJson<ColumnInfo[]>(props.baseUrl, "/api/mobile/schema/columns", props.token, {
-      connection_id: connectionId.value,
+    columns.value = await loadDirectMetadata<ColumnInfo[]>("columns", {
+      connectionId: connectionId.value,
       database: database.value,
       schema: schema.value,
       table: table.name,
@@ -597,11 +463,7 @@ async function saveCurrentSql() {
   saveStatus.value = "";
   const wasUpdate = Boolean(savedSqlId.value);
   try {
-    const saved = await apiPostJson<SavedSqlFile>(
-      props.baseUrl,
-      "/api/mobile/saved-sql",
-      props.token,
-      {
+    const saved = saveDirectSavedSql({
         id: savedSqlId.value || undefined,
         connectionId: connectionId.value,
         folderId: savedSqlFolderId.value,
@@ -609,9 +471,7 @@ async function saveCurrentSql() {
         schema: schema.value || null,
         name: saveName.value.trim(),
         sql: sql.value,
-      },
-      { timeoutMs: 8_000 },
-    );
+    });
     savedSqlId.value = saved.id;
     savedSqlFolderId.value = saved.folderId;
     saveName.value = saved.name.replace(/\.sql$/i, "");
@@ -636,7 +496,7 @@ watch(
   async (draft) => {
     if (!draft) return;
     sql.value = draft.sql;
-    executionMode.value = draft.executionMode ?? "safe";
+    executionMode.value = draft.executionMode === "advanced" ? "advanced" : "safe";
     connectionId.value = draft.connectionId;
     savedSqlId.value = draft.savedSqlId ?? "";
     savedSqlFolderId.value = draft.savedSqlFolderId ?? null;
@@ -651,10 +511,7 @@ watch(
 async function executePage(offset: number) {
   if (!connectionId.value || !database.value || !sql.value.trim()) return;
   const requestId = ++queryRequestId;
-  queryController?.abort();
-  const controller = new AbortController();
   const executionId = createExecutionId();
-  queryController = controller;
   activeExecutionId = executionId;
   executing.value = true;
   error.value = "";
@@ -662,21 +519,15 @@ async function executePage(offset: number) {
   exportStatus.value = "";
   selectedCell.value = null;
   try {
-    const response = await apiPostJson<QueryResult>(
-      props.baseUrl,
-      "/api/mobile/query",
-      props.token,
-      {
+    const response = await executeDirectQuery({
         connectionId: connectionId.value,
         database: database.value,
         schema: schema.value || null,
         sql: sql.value,
         executionId,
         offset,
-        pageSize: SERVER_PAGE_SIZE,
-      },
-      { signal: controller.signal, timeoutMs: 45_000 },
-    );
+        pageSize: QUERY_PAGE_SIZE,
+    });
     if (requestId === queryRequestId) {
       result.value = response;
       resultOffset.value = offset;
@@ -684,14 +535,12 @@ async function executePage(offset: number) {
     }
   } catch (reason) {
     if (requestId === queryRequestId) {
-      if (reason instanceof DOMException && reason.name === "AbortError") error.value = "查询已取消或网络请求超时";
-      else fail(reason);
-      void requestServerCancellation(executionId, true).catch(() => undefined);
+      fail(reason);
+      void cancelDirectQuery(executionId).catch(() => undefined);
     }
   } finally {
     if (requestId === queryRequestId) {
       executing.value = false;
-      queryController = null;
       activeExecutionId = null;
     }
   }
@@ -707,12 +556,11 @@ async function cancelQuery() {
   cancelling.value = true;
   error.value = "";
   try {
-    await requestServerCancellation(executionId);
+    await cancelDirectQuery(executionId);
     error.value = "查询已取消，手机正在释放数据库语句";
   } catch (reason) {
     error.value = reason instanceof Error ? `取消请求未确认：${reason.message}` : "取消请求未确认";
   } finally {
-    queryController?.abort();
     cancelling.value = false;
   }
 }
@@ -747,68 +595,6 @@ async function shareResult() {
     }
   } finally {
     if (requestId === exportRequestId) exporting.value = false;
-  }
-}
-
-async function exportFullResult() {
-  if (executionMode.value !== "safe" || fullExporting.value) return;
-  fullExporting.value = true;
-  error.value = "";
-  exportStatus.value = "后台导出任务正在启动…";
-  const exportId = createExecutionId();
-  try {
-    const resolvedSql = executableSql();
-    await apiPostJson<{ exportId: string }>(
-      props.baseUrl,
-      "/api/export/query-result",
-      props.token,
-      {
-        request: {
-          exportId,
-          connectionId: connectionId.value,
-          database: database.value,
-          schema: schema.value || null,
-          sql: resolvedSql,
-          queryBaseSql: resolvedSql,
-          setupSql: [],
-          databaseType: selectedConnection.value?.dbType,
-          useAgentCursor: false,
-          filePath: "",
-          format: "csv",
-          includeSqlSheet: false,
-          pageSize: 1000,
-          rowLimit: null,
-          timeoutSecs: 600,
-          keysetOptimizationEnabled: true,
-          executionId: `mobile-export-${exportId}`,
-        },
-      },
-      { timeoutMs: 15_000 },
-    );
-    exportStatus.value = "Android 原生驱动正在导出完整结果…";
-    const progress = await apiFetch(
-      props.baseUrl,
-      `/api/export/query-result/progress/${encodeURIComponent(exportId)}`,
-      props.token,
-      { headers: { Accept: "text/event-stream" } },
-    );
-    const progressText = await progress.text();
-    if (!progress.ok || /"status":"error"/i.test(progressText)) throw new Error("本机导出失败");
-    const download = await apiFetch(
-      props.baseUrl,
-      `/api/export/query-result/download/${encodeURIComponent(exportId)}`,
-      props.token,
-      { headers: { Accept: "text/csv" } },
-    );
-    if (!download.ok) throw new Error(await download.text());
-    const csv = await download.text();
-    const filename = `dbx-full-${database.value}-${new Date().toISOString().replaceAll(":", "-")}.csv`;
-    const delivery = await shareQueryExportText(csv, filename);
-    exportStatus.value = delivery === "share" ? `完整结果已打开分享面板 · ${filename}` : `完整结果已下载 · ${filename}`;
-  } catch (reason) {
-    error.value = reason instanceof Error ? `完整导出失败：${reason.message}` : "完整导出失败";
-  } finally {
-    fullExporting.value = false;
   }
 }
 
@@ -918,7 +704,6 @@ function buildPendingUpdateSql() {
   confirmedWrite.value = false;
   pendingCellEdits.value = [];
   result.value = null;
-  resultSets.value = [];
   exportStatus.value = "批量改单元格 SQL 已生成；请审阅并显式确认写操作";
 }
 
@@ -961,7 +746,7 @@ function autoFitColumns() {
     </div>
     <div class="editor">
       <div class="editor-heading">
-        <span>{{ executionMode === "safe" ? "SERVER-ENFORCED READ ONLY" : "CONTROLLED ADVANCED SQL" }}</span>
+        <span>{{ executionMode === "safe" ? "ANDROID NATIVE READ ONLY" : "CONTROLLED ADVANCED SQL" }}</span>
         <small>{{ executionMode === "safe" ? "单条 · 50 行/页 · 2 MiB · 30 秒" : "显式写确认 · 最多 100 条 · 每结果 500 行" }}</small>
         <button type="button" aria-label="格式化 SQL" @click="formatCurrentSql">FORMAT</button>
       </div>
@@ -969,8 +754,6 @@ function autoFitColumns() {
         <button v-for="mode in [
           ['safe', '安全只读'],
           ['advanced', '高级执行'],
-          ['script', '脚本 / 批量'],
-          ['transaction', '手动事务'],
         ]" :key="mode[0]" :class="{ active: executionMode === mode[0] }" type="button" @click="executionMode = mode[0] as ExecutionMode">
           {{ mode[1] }}
         </button>
@@ -986,18 +769,6 @@ function autoFitColumns() {
           :placeholder="`生产库确认：输入 ${selectedConnection.name}`"
           autocomplete="off"
         />
-        <label v-if="executionMode === 'script'">
-          <input v-model="continueOnError" type="checkbox" />
-          <span>单条失败后继续执行后续语句</span>
-        </label>
-        <div v-if="executionMode === 'transaction'" class="transaction-actions">
-          <button v-if="!transactionId" :disabled="!writeAllowed || !productionConfirmed" type="button" @click="beginTransaction">BEGIN</button>
-          <template v-else>
-            <b>TX {{ transactionId.slice(0, 8) }}</b>
-            <button type="button" @click="finishTransaction(true)">COMMIT</button>
-            <button class="danger" type="button" @click="finishTransaction(false)">ROLLBACK</button>
-          </template>
-        </div>
       </div>
       <div class="editor-input">
         <textarea
@@ -1033,12 +804,8 @@ function autoFitColumns() {
         <span>JSON PARAMETERS · 支持 :name、${name}、&#123;&#123;name&#125;&#125;</span>
         <textarea v-model="parameterJson" spellcheck="false" placeholder='{"userId": 42, "active": true}'></textarea>
       </div>
-      <div class="ai-sql">
-        <input v-model="aiPrompt" maxlength="4000" placeholder="让 AI 生成、解释或改写当前 SQL" @keyup.enter="askAi" />
-        <button :disabled="aiRunning || !database || !aiPrompt.trim()" type="button" @click="askAi">{{ aiRunning ? "AI…" : "ASK AI" }}</button>
-      </div>
       <div class="query-actions">
-        <button :disabled="executing || !database || !sql.trim() || (executionMode === 'transaction' && !transactionId)" type="button" @click="execute">
+        <button :disabled="executing || !database || !sql.trim()" type="button" @click="execute">
           {{ executing ? "正在执行…" : executionMode === "safe" ? "执行查询  ▶" : "执行所选模式  ▶" }}
         </button>
         <button
@@ -1113,17 +880,6 @@ function autoFitColumns() {
       <pre>{{ explainResult }}</pre>
     </section>
     <section v-if="result" class="result-panel">
-      <nav v-if="resultSets.length > 1" class="result-tabs" aria-label="多结果集">
-        <button
-          v-for="(item, index) in resultSets"
-          :key="index"
-          :class="{ active: activeResultIndex === index, error: item.execution_error }"
-          type="button"
-          @click="selectResultSet(index)"
-        >
-          #{{ (item.statement_index ?? index) + 1 }} · {{ item.execution_error ? "ERROR" : `${item.rows.length || item.affected_rows} ROWS` }}
-        </button>
-      </nav>
       <header>
         <div class="result-metrics">
           <span>
@@ -1150,9 +906,6 @@ function autoFitColumns() {
             @click="shareResult"
           >
             {{ exporting ? "PREPARING…" : "EXPORT ↗" }}
-          </button>
-          <button v-if="executionMode === 'safe'" :disabled="fullExporting" type="button" @click="exportFullResult">
-            {{ fullExporting ? "FULL…" : "FULL CSV" }}
           </button>
         </div>
       </header>
@@ -1204,9 +957,9 @@ function autoFitColumns() {
       </div>
       <p v-else>执行成功，影响 {{ result.affected_rows }} 行。</p>
       <footer v-if="result.columns.length && (resultOffset > 0 || result.has_more)">
-        <button :disabled="executing || resultOffset === 0" @click="executePage(Math.max(0, resultOffset - SERVER_PAGE_SIZE))">←</button>
-        <span>SERVER PAGE {{ resultPage }}</span>
-        <button :disabled="executing || !result.has_more" @click="executePage(resultOffset + SERVER_PAGE_SIZE)">→</button>
+        <button :disabled="executing || resultOffset === 0" @click="executePage(Math.max(0, resultOffset - QUERY_PAGE_SIZE))">←</button>
+        <span>LOCAL PAGE {{ resultPage }}</span>
+        <button :disabled="executing || !result.has_more" @click="executePage(resultOffset + QUERY_PAGE_SIZE)">→</button>
       </footer>
     </section>
     <div
@@ -1254,17 +1007,13 @@ select { width: 100%; height: 42px; border: 1px solid var(--line); border-radius
 .editor-heading { display: grid; min-height: 38px; grid-template-columns: 1fr auto auto; align-items: center; gap: 9px; padding-left: 12px; color: var(--acid); font-size: 8px; letter-spacing: .12em; }
 .editor-heading small { color: var(--muted); font-size: 7px; letter-spacing: 0; }
 .editor-heading button { align-self: stretch; border: 0; border-left: 1px solid var(--line); background: rgba(199,255,61,.08); padding: 0 10px; color: var(--acid); font: inherit; font-size: 7px; letter-spacing: .1em; }
-.execution-modes { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); }
+.execution-modes { display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--line); }
 .execution-modes button { min-height: 39px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font: inherit; font-size: 7px; }
 .execution-modes button.active { background: rgba(199,255,61,.12); color: var(--acid); }
 .advanced-guard { display: grid; gap: 9px; border-top: 1px solid rgba(255,184,77,.28); background: rgba(255,184,77,.055); padding: 11px; }
 .advanced-guard label { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 8px; line-height: 1.45; }
 .advanced-guard label span { display: inline; margin: 0; color: inherit; font-size: inherit; letter-spacing: 0; }
 .advanced-guard > input { min-height: 38px; border: 1px solid rgba(255,184,77,.35); background: #0d0e0c; padding: 0 9px; color: var(--ink); font: inherit; font-size: 9px; }
-.transaction-actions { display: flex; align-items: center; gap: 7px; }
-.transaction-actions b { margin-right: auto; color: var(--acid); font-size: 8px; }
-.transaction-actions button { min-height: 34px; border: 1px solid var(--line); background: rgba(199,255,61,.08); padding: 0 10px; color: var(--acid); font: inherit; font-size: 7px; }
-.transaction-actions button.danger { color: var(--danger); }
 .editor-input { position: relative; border-top: 1px solid var(--line); }
 textarea { display: block; width: 100%; min-height: 180px; resize: vertical; border: 0; outline: none; background: transparent; padding: 15px; color: #e7f5d1; font: 12px/1.65 "Azeret Mono Variable", monospace; }
 .editor-tools { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
@@ -1274,9 +1023,6 @@ textarea { display: block; width: 100%; min-height: 180px; resize: vertical; bor
 .parameter-editor { border-top: 1px solid var(--line); }
 .parameter-editor > span { display: block; padding: 8px 11px; color: var(--muted); font-size: 7px; letter-spacing: .08em; }
 .parameter-editor textarea { min-height: 84px; border-top: 1px solid var(--line); font-size: 10px; }
-.ai-sql { display: grid; grid-template-columns: 1fr auto; border-top: 1px solid var(--line); }
-.ai-sql input { min-width: 0; min-height: 42px; border: 0; background: rgba(96,76,255,.05); padding: 0 11px; color: var(--ink); font: inherit; font-size: 9px; outline: none; }
-.ai-sql button { min-width: 82px; border: 0; border-left: 1px solid var(--line); background: rgba(96,76,255,.12); color: #b9aeff; font: inherit; font-size: 7px; }
 .suggestion-list { position: absolute; z-index: 4; right: 8px; bottom: 8px; left: 8px; overflow: auto; max-height: 190px; border: 1px solid rgba(199,255,61,.45); background: rgba(12,15,12,.98); box-shadow: 0 -16px 35px rgba(0,0,0,.55); }
 .suggestion-list button { display: grid; width: 100%; min-height: 40px; grid-template-columns: 25px minmax(0,1fr) auto; align-items: center; gap: 8px; border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 6px 9px; color: var(--ink); text-align: left; }
 .suggestion-list i { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid var(--line); color: var(--muted); font-size: 6px; font-style: normal; }
@@ -1325,10 +1071,6 @@ button:disabled { opacity: .45; }
 .explain-panel header button { width: 42px; height: 38px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); }
 .explain-panel pre { overflow: auto; max-height: 44vh; margin: 0; padding: 13px; color: var(--ink); font: 9px/1.6 "Azeret Mono Variable", monospace; white-space: pre-wrap; }
 .result-panel { border: 1px solid var(--line); background: var(--panel); }
-.result-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--line); }
-.result-tabs button { flex: 0 0 auto; min-height: 37px; border: 0; border-right: 1px solid var(--line); background: transparent; padding: 0 11px; color: var(--muted); font: inherit; font-size: 7px; }
-.result-tabs button.active { background: rgba(199,255,61,.1); color: var(--acid); }
-.result-tabs button.error { color: var(--danger); }
 .result-panel > header { display: grid; min-height: 46px; grid-template-columns: minmax(140px, 1fr) auto; border-bottom: 1px solid var(--line); color: var(--acid); font-size: 8px; letter-spacing: .1em; }
 .result-metrics { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 11px; }
 .result-panel em { color: var(--amber); font-style: normal; }

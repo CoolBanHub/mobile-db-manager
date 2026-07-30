@@ -1,15 +1,25 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { exportQueryResult, type QueryExportFormat } from "../lib/queryExport";
-import { ApiError, apiPostJson, type MobileQueryDraft, type MobileTableCellUpdateResponse, type MobileTableFilter, type MobileTableFilterOperator, type MobileTableDataResponse, type MobileTableRowMutationResponse, type MobileTableSort, type MobileTableTarget } from "../lib/mobileApi";
+import {
+  deleteDirectTableRow,
+  insertDirectTableRow,
+  loadDirectTableData,
+  updateDirectTableCell,
+} from "../lib/directDatabase";
+import type {
+  MobileQueryDraft,
+  MobileTableFilter,
+  MobileTableFilterOperator,
+  MobileTableDataResponse,
+  MobileTableSort,
+  MobileTableTarget,
+} from "../lib/mobileTypes";
 
 const props = defineProps<{
-  baseUrl: string;
-  token: string | null;
   target: MobileTableTarget;
 }>();
 const emit = defineEmits<{
-  authExpired: [];
   back: [];
   openQuery: [draft: Omit<MobileQueryDraft, "nonce">];
 }>();
@@ -64,7 +74,6 @@ const filterNeedsValue = computed(() => filterOperators.find((item) => item.valu
 const pendingEntries = computed(() => Object.entries(pendingEdits.value));
 const pendingCount = computed(() => pendingEntries.value.length);
 let requestId = 0;
-let controller: AbortController | null = null;
 
 function displayValue(value: unknown) {
   if (value === null) return "NULL";
@@ -88,25 +97,17 @@ function actionErrorMessage(action: "新增" | "删除" | "保存" | "复制" | 
 
 async function loadPage(offset: number) {
   const currentRequest = ++requestId;
-  controller?.abort();
-  controller = new AbortController();
   loading.value = true;
   error.value = "";
   actionError.value = "";
   try {
-    const page = await apiPostJson<MobileTableDataResponse>(
-      props.baseUrl,
-      "/api/mobile/table-data",
-      props.token,
-      {
+    const page = await loadDirectTableData({
         ...props.target,
         offset,
         limit: pageSize.value,
         filters: filters.value,
         sort: sort.value,
-      },
-      { signal: controller.signal, timeoutMs: 45_000 },
-    );
+    });
     if (currentRequest === requestId) {
       response.value = page;
       selectedCell.value = null;
@@ -119,13 +120,10 @@ async function loadPage(offset: number) {
     }
   } catch (reason) {
     if (currentRequest !== requestId) return;
-    if (reason instanceof ApiError && reason.status === 401) emit("authExpired");
-    else if (reason instanceof DOMException && reason.name === "AbortError") error.value = "数据请求已取消或超时";
-    else error.value = reason instanceof Error ? reason.message : "表数据加载失败";
+    error.value = reason instanceof Error ? reason.message : "表数据加载失败";
   } finally {
     if (currentRequest === requestId) {
       loading.value = false;
-      controller = null;
     }
   }
 }
@@ -290,25 +288,18 @@ async function insertRow() {
   actionError.value = "";
   try {
     const row = response.value.columnMeta.map((_, index) => (insertIncluded.value[index] ? (insertNulls.value[index] ? null : insertValues.value[index]) : null));
-    const result = await apiPostJson<MobileTableRowMutationResponse>(
-      props.baseUrl,
-      "/api/mobile/table-data/insert",
-      props.token,
-      {
+    const result = await insertDirectTableRow({
         ...props.target,
         row,
         providedColumns: insertIncluded.value,
         productionConfirmation: rowMutationConfirmation.value || null,
-      },
-      { timeoutMs: 45_000 },
-    );
+    });
     if (result.affectedRows !== 1) throw new Error(`新增操作影响了 ${result.affectedRows} 行`);
     insertOpen.value = false;
     await loadPage(0);
     interactionStatus.value = "已新增 1 行数据";
   } catch (reason) {
-    if (reason instanceof ApiError && reason.status === 401) emit("authExpired");
-    else actionError.value = actionErrorMessage("新增", reason);
+    actionError.value = actionErrorMessage("新增", reason);
   } finally {
     inserting.value = false;
   }
@@ -319,17 +310,11 @@ async function deleteRow() {
   deleting.value = true;
   actionError.value = "";
   try {
-    const result = await apiPostJson<MobileTableRowMutationResponse>(
-      props.baseUrl,
-      "/api/mobile/table-data/delete",
-      props.token,
-      {
+    const result = await deleteDirectTableRow({
         ...props.target,
         originalRow: deleteCandidate.value.row,
         productionConfirmation: rowMutationConfirmation.value || null,
-      },
-      { timeoutMs: 45_000 },
-    );
+    });
     if (result.affectedRows !== 1) {
       throw new Error(result.affectedRows === 0 ? "目标行已变化或不存在，请刷新后重试" : `删除操作影响了 ${result.affectedRows} 行`);
     }
@@ -338,8 +323,7 @@ async function deleteRow() {
     await loadPage(offset);
     interactionStatus.value = "已删除 1 行数据";
   } catch (reason) {
-    if (reason instanceof ApiError && reason.status === 401) emit("authExpired");
-    else actionError.value = actionErrorMessage("删除", reason);
+    actionError.value = actionErrorMessage("删除", reason);
   } finally {
     deleting.value = false;
   }
@@ -378,19 +362,18 @@ async function savePendingEdits() {
   try {
     for (const [key, value] of pendingEntries.value) {
       const [pageRowIndex, columnIndex] = key.split(":").map(Number);
-      const result = await apiPostJson<MobileTableCellUpdateResponse>(
-        props.baseUrl,
-        "/api/mobile/table-data/update",
-        props.token,
-        {
+      const row = response.value.result.rows[pageRowIndex];
+      const column = response.value.result.columns[columnIndex];
+      if (!row || column === undefined) {
+        throw new Error(`暂存修改的位置已失效（第 ${pageRowIndex + 1} 行，第 ${columnIndex + 1} 列），请刷新后重试`);
+      }
+      const result = await updateDirectTableCell({
           ...props.target,
-          column: response.value.result.columns[columnIndex],
-          originalRow: response.value.result.rows[pageRowIndex],
+          column,
+          originalRow: row,
           value,
           productionConfirmation: productionConfirmation.value || null,
-        },
-        { timeoutMs: 45_000 },
-      );
+      });
       if (result.affectedRows !== 1) {
         throw new Error(result.affectedRows === 0 ? "目标行已变化或不存在，请刷新后重试" : "更新影响了多行，已停止后续保存");
       }
@@ -399,8 +382,7 @@ async function savePendingEdits() {
     await loadPage(response.value.offset);
     interactionStatus.value = `已保存 ${savedCount} 处修改`;
   } catch (reason) {
-    if (reason instanceof ApiError && reason.status === 401) emit("authExpired");
-    else actionError.value = actionErrorMessage("保存", reason);
+    actionError.value = actionErrorMessage("保存", reason);
   } finally {
     saving.value = false;
   }
@@ -455,10 +437,6 @@ async function sharePage() {
 }
 
 onMounted(() => loadPage(0));
-onBeforeUnmount(() => {
-  requestId++;
-  controller?.abort();
-});
 </script>
 
 <template>
