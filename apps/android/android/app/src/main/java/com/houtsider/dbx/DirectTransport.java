@@ -58,9 +58,6 @@ final class DirectTransport {
             return openSsh(config, targetHost, targetPort);
         }
         if (config.optBoolean("proxyEnabled", false)) {
-            if (!"http".equals(config.optString("proxyType", "http"))) {
-                throw new IllegalArgumentException("Android 直连当前仅支持 HTTP CONNECT 代理");
-            }
             HttpConnectTunnel tunnel = new HttpConnectTunnel(
                     config.optString("proxyHost"),
                     config.optInt("proxyPort"),
@@ -111,9 +108,6 @@ final class DirectTransport {
         session.setServerAliveInterval(Math.max(5_000, config.optInt("keepaliveIntervalSecs", 30) * 1_000));
 
         if (config.optBoolean("proxyEnabled", false)) {
-            if (!"http".equals(config.optString("proxyType", "http"))) {
-                throw new IllegalArgumentException("SSH 上游当前仅支持 HTTP CONNECT 代理");
-            }
             ProxyHTTP proxy = new ProxyHTTP(config.optString("proxyHost"), config.optInt("proxyPort"));
             if (!config.optString("proxyUsername").isEmpty()) {
                 proxy.setUserPasswd(config.optString("proxyUsername"), config.optString("proxyPassword"));

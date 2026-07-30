@@ -7,7 +7,6 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.math.BigDecimal;
@@ -70,13 +69,8 @@ public class DirectDatabasePlugin extends Plugin {
             JSObject result = summary(config);
             result.put("username", config.optString("username"));
             result.put("hasPassword", !config.optString("password").isEmpty());
-            result.put("idleTimeoutSecs", config.optInt("idleTimeoutSecs", 60));
             result.put("keepaliveIntervalSecs", config.optInt("keepaliveIntervalSecs", 30));
-            result.put("caCertPath", config.optString("caCertPath"));
-            result.put("clientCertPath", config.optString("clientCertPath"));
-            result.put("clientKeyPath", "");
             result.put("proxyEnabled", config.optBoolean("proxyEnabled", false));
-            result.put("proxyType", config.optString("proxyType", "http"));
             result.put("proxyHost", config.optString("proxyHost"));
             result.put("proxyPort", config.optInt("proxyPort", 8080));
             result.put("proxyUsername", config.optString("proxyUsername"));
@@ -92,34 +86,9 @@ public class DirectDatabasePlugin extends Plugin {
             result.put("hasSshPrivateKeyPassphrase", !config.optString("sshPrivateKeyPassphrase").isEmpty());
             result.put("connectionString", "");
             result.put("hasConnectionString", !config.optString("connectionString").isEmpty());
-            result.put("oracleConnectionType", config.optString("oracleConnectionType", "service_name"));
-            result.put("sysdba", false);
-            result.put("urlParams", config.optString("urlParams"));
-            result.put("initScript", config.optString("initScript"));
-            result.put("visibleDatabases", config.optJSONArray("visibleDatabases") == null ? new JSONArray() : config.optJSONArray("visibleDatabases"));
-            result.put("visibleSchemas", config.optJSONObject("visibleSchemas") == null ? new JSONObject() : config.optJSONObject("visibleSchemas"));
-            result.put("productionDatabases", config.optJSONArray("productionDatabases") == null ? new JSONArray() : config.optJSONArray("productionDatabases"));
-            result.put("redisConnectionMode", config.optString("redisConnectionMode", "standalone"));
-            result.put("redisSentinelMaster", config.optString("redisSentinelMaster"));
-            result.put("redisSentinelNodes", config.optString("redisSentinelNodes"));
-            result.put("redisSentinelUsername", config.optString("redisSentinelUsername"));
-            result.put("hasRedisSentinelPassword", !config.optString("redisSentinelPassword").isEmpty());
-            result.put("redisSentinelTls", config.optBoolean("redisSentinelTls", false));
-            result.put("redisClusterNodes", config.optString("redisClusterNodes"));
-            result.put("jdbcDriverClass", "");
-            result.put("jdbcDriverPaths", new JSONArray());
-            result.put("driverProfile", config.optString("driverProfile", "android-native"));
-            result.put("driverLabel", config.optString(
-                    "driverLabel",
-                    config.optString("dbType").equals("redis")
-                            ? "Android native Redis"
-                            : config.optString("dbType").equals("mongodb")
-                                    ? "Android bundled MongoDB"
-                                    : "Android bundled JDBC"));
             result.put("tunnelLayerCount",
                     (config.optBoolean("sshEnabled", false) ? 1 : 0)
                             + (config.optBoolean("proxyEnabled", false) ? 1 : 0));
-            result.put("tunnelProfileCount", 0);
             return result;
         });
     }
@@ -164,16 +133,6 @@ public class DirectDatabasePlugin extends Plugin {
                 }
                 return new JSObject().put("message", "手机已直接连接数据库");
             }
-        });
-    }
-
-    @PluginMethod
-    public void listDatabases(PluginCall call) {
-        run(call, () -> {
-            JSONObject draft = requiredObject(call, "connection");
-            JSONObject effective = withStoredSecrets(draft);
-            validateDraft(effective);
-            return metadata(effective, "databases", "", "", "", "", 500, 0);
         });
     }
 
@@ -459,9 +418,7 @@ public class DirectDatabasePlugin extends Plugin {
                 .put("readOnly", config.optBoolean("readOnly"))
                 .put("isProduction", config.optBoolean("isProduction"))
                 .put("connectTimeoutSecs", config.optInt("connectTimeoutSecs", 10))
-                .put("queryTimeoutSecs", config.optInt("queryTimeoutSecs", 60))
-                .put("hasProxy", config.optBoolean("proxyEnabled", false))
-                .put("hasCaCertificate", !config.optString("caCertPath").isEmpty());
+                .put("queryTimeoutSecs", config.optInt("queryTimeoutSecs", 60));
     }
 
     private void validateDraft(JSONObject draft) {
@@ -473,10 +430,6 @@ public class DirectDatabasePlugin extends Plugin {
         String type = draft.optString("dbType");
         if (!SUPPORTED_DATABASES.contains(type)) {
             throw new IllegalArgumentException("当前直连版本支持 PostgreSQL、MySQL/MariaDB、SQL Server、Redis 和 MongoDB");
-        }
-        if (type.equals("redis")
-                && !"standalone".equals(draft.optString("redisConnectionMode", "standalone"))) {
-            throw new IllegalArgumentException("Android 直连当前仅支持 Redis Standalone 模式");
         }
         if (type.equals("redis")) {
             String database = optionalDatabase(draft).trim();
@@ -494,9 +447,6 @@ public class DirectDatabasePlugin extends Plugin {
             throw new IllegalArgumentException("MongoDB URI 不能与 Android SSH/HTTP 隧道同时使用；请改填主机、端口和账号");
         }
         if (draft.optBoolean("proxyEnabled", false)) {
-            if (!"http".equals(draft.optString("proxyType", "http"))) {
-                throw new IllegalArgumentException("Android 直连当前仅支持 HTTP CONNECT 代理");
-            }
             required(draft.optString("proxyHost"), "HTTP 代理主机");
             if (draft.optInt("proxyPort") <= 0) throw new IllegalArgumentException("HTTP 代理端口必须大于 0");
         }
@@ -504,14 +454,6 @@ public class DirectDatabasePlugin extends Plugin {
             required(draft.optString("sshHost"), "SSH 主机");
             required(draft.optString("sshUsername"), "SSH 用户名");
             if (draft.optInt("sshPort", 22) <= 0) throw new IllegalArgumentException("SSH 端口必须大于 0");
-        }
-        if (!draft.optString("caCertPath").isEmpty()
-                || !draft.optString("clientCertPath").isEmpty()
-                || !draft.optString("clientKeyPath").isEmpty()) {
-            throw new IllegalArgumentException("Android 直连暂未实现自定义 CA 或客户端证书导入");
-        }
-        if (!draft.optString("initScript").isEmpty() || !draft.optString("urlParams").isEmpty()) {
-            throw new IllegalArgumentException("Android 直连暂未实现初始化脚本和 URL 参数；可改用完整 JDBC 连接串");
         }
     }
 
@@ -565,8 +507,7 @@ public class DirectDatabasePlugin extends Plugin {
         JSONObject effective = new JSONObject(incoming.toString());
         for (String name : new String[]{
                 "password", "proxyPassword", "sshPassword", "sshPrivateKey",
-                "sshPrivateKeyPassphrase", "connectionString", "clientKeyPath",
-                "redisSentinelPassword"}) {
+                "sshPrivateKeyPassphrase", "connectionString"}) {
             if (effective.optString(name, "").isEmpty() && !existing.optString(name, "").isEmpty()) {
                 effective.put(name, existing.get(name));
             }

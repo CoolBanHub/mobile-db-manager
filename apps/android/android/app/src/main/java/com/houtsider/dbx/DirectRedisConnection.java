@@ -29,10 +29,6 @@ final class DirectRedisConnection {
     private DirectRedisConnection() {}
 
     static void test(JSONObject config) throws Exception {
-        if (!"standalone".equals(config.optString("redisConnectionMode", "standalone"))) {
-            throw new IllegalArgumentException("Android 直连当前仅支持 Redis Standalone 模式");
-        }
-
         String host = config.optString("host");
         int port = config.optInt("port", 6379);
         int timeoutMillis = Math.max(1, config.optInt("connectTimeoutSecs", 10)) * 1_000;

@@ -68,7 +68,7 @@ final class DirectConnectionStore {
             }
         }
         merged.put("id", id);
-        vault.put(VAULT_PREFIX + id, merged.toString(), false);
+        vault.put(VAULT_PREFIX + id, merged.toString());
         Set<String> ids = new LinkedHashSet<>(preferences().getStringSet(IDS, Collections.emptySet()));
         ids.add(id);
         if (!preferences().edit().putStringSet(IDS, ids).commit()) {
@@ -91,8 +91,6 @@ final class DirectConnectionStore {
                 || name.equals("sshPassword")
                 || name.equals("sshPrivateKey")
                 || name.equals("sshPrivateKeyPassphrase")
-                || name.equals("connectionString")
-                || name.equals("clientKeyPath")
-                || name.equals("redisSentinelPassword");
+                || name.equals("connectionString");
     }
 }
