@@ -3182,11 +3182,11 @@ pub async fn begin_postgres_read_only_transaction(
         Err(_) => {
             let connection = match Arc::try_unwrap(session.connection) {
                 Ok(connection) => connection.into_inner(),
-                Err(_) => unreachable!("new mobile transaction connection has no additional owners"),
+                Err(_) => unreachable!("new transaction connection has no additional owners"),
             };
             match connection {
                 TxnConnection::Postgres(conn) => discard_postgres_pool_connection(*conn),
-                TxnConnection::Mysql(_) => unreachable!("mobile read-only transaction is PostgreSQL-only"),
+                TxnConnection::Mysql(_) => unreachable!("read-only transaction is PostgreSQL-only"),
             }
             return Err(ManualTransactionError::timeout(
                 "Timed out registering the PostgreSQL transaction; the connection was discarded",
