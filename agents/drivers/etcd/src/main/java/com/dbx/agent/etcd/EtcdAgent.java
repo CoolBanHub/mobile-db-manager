@@ -178,7 +178,7 @@ public final class EtcdAgent {
         ByteSequence start = continuation == null || continuation.isBlank()
             ? prefixStart(prefix)
             : ByteSequence.from(Base64.getDecoder().decode(continuation));
-        GetOption.Builder optionBuilder = GetOption.newBuilder()
+        GetOption.Builder optionBuilder = GetOption.builder()
             .withRange(prefixEnd(byteSequence(prefix)))
             .withLimit(Math.max(1, limit))
             .withSortField(GetOption.SortTarget.KEY)
@@ -212,7 +212,7 @@ public final class EtcdAgent {
         KV active = requireKv();
         ByteSequence key = keyBytes(params);
         Long revision = longOrNull(params, "revision");
-        GetOption.Builder optionBuilder = GetOption.newBuilder();
+        GetOption.Builder optionBuilder = GetOption.builder();
         if (revision != null && revision > 0) {
             optionBuilder.withRevision(revision);
         }
@@ -263,9 +263,9 @@ public final class EtcdAgent {
             if (ttl <= 0) throw new IllegalArgumentException("ttl must be a positive integer");
             LeaseGrantResponse grant = requireClient().getLeaseClient().grant(ttl).get(RPC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             grantedLeaseId = grant.getID();
-            option = PutOption.newBuilder().withLeaseId(grantedLeaseId).build();
+            option = PutOption.builder().withLeaseId(grantedLeaseId).build();
         } else if (hasLease) {
-            option = PutOption.newBuilder().withLeaseId(leaseElement.getAsLong()).build();
+            option = PutOption.builder().withLeaseId(leaseElement.getAsLong()).build();
         }
         final long leaseToCleanUp = grantedLeaseId;
         final Lease leaseClient = leaseToCleanUp == 0 ? null : requireClient().getLeaseClient();
@@ -377,7 +377,7 @@ public final class EtcdAgent {
         long expectedRevision = expected == null ? source.getModRevision() : expected;
         PutOption putOption = source.getLease() == 0
             ? PutOption.DEFAULT
-            : PutOption.newBuilder().withLeaseId(source.getLease()).build();
+            : PutOption.builder().withLeaseId(source.getLease()).build();
 
         TxnResponse response = active.txn()
             .If(
@@ -404,7 +404,7 @@ public final class EtcdAgent {
         ByteSequence key = keyBytes(params);
         int limit = Math.min(Math.max(1, intOrDefault(params, "limit", 100)), 500);
         Long requestedEnd = longOrNull(params, "endRevision");
-        GetOption.Builder latestOption = GetOption.newBuilder();
+        GetOption.Builder latestOption = GetOption.builder();
         if (requestedEnd != null && requestedEnd > 0) {
             latestOption.withRevision(requestedEnd);
         }
@@ -429,7 +429,7 @@ public final class EtcdAgent {
         CountDownLatch created = new CountDownLatch(1);
         CountDownLatch completed = new CountDownLatch(1);
         Watch watch = client.getWatchClient();
-        WatchOption option = WatchOption.newBuilder()
+        WatchOption option = WatchOption.builder()
             .withRevision(startRevision)
             .withPrevKV(true)
             .withProgressNotify(true)
@@ -584,7 +584,7 @@ public final class EtcdAgent {
             alarms.add("UNAVAILABLE: " + safeMessage(rootCause(error)));
         }
 
-        GetOption countOption = GetOption.newBuilder()
+        GetOption countOption = GetOption.builder()
             .withRange(ByteSequence.from(new byte[] {0}))
             .withCountOnly(true)
             .build();
@@ -928,6 +928,8 @@ public final class EtcdAgent {
         }
     }
 
+    // Serialized reflectively by Gson when the agent writes the handshake.
+    @SuppressWarnings("unused")
     private static final class HandshakeResult {
         private final int protocolVersion;
         private final int agentProtocolVersion;

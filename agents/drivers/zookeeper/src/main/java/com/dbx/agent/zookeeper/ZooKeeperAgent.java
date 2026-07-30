@@ -751,6 +751,8 @@ public final class ZooKeeperAgent {
         }
     }
 
+    // Serialized reflectively by Gson when the agent writes the handshake.
+    @SuppressWarnings("unused")
     private static final class HandshakeResult {
         private final int protocolVersion;
         private final int agentProtocolVersion;

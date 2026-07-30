@@ -119,6 +119,7 @@ class Db2AgentTest extends JdbcFakeExecutionBehaviorTest {
         });
     }
 
+    @SafeVarargs
     private static ResultSet rows(Map<String, Object>... rows) {
         return proxy(ResultSet.class, new MethodHandler() {
             private int index = -1;

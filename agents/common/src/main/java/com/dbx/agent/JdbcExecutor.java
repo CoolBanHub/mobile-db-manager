@@ -691,24 +691,6 @@ public final class JdbcExecutor {
         );
     }
 
-    private QueryResult emptyQueryResult(long start) {
-        return new QueryResult(
-            Collections.emptyList(),
-            Collections.emptyList(),
-            0L,
-            System.currentTimeMillis() - start
-        );
-    }
-
-    private QueryPageResult emptyQueryPageResult(long start) {
-        return new QueryPageResult(
-            Collections.emptyList(),
-            Collections.emptyList(),
-            0L,
-            System.currentTimeMillis() - start
-        );
-    }
-
     static String trimSql(String sql) {
         String trimmed = stripTrailingSlashDelimiter(sql.trim());
         if (isPlSqlBlock(trimmed)) {

@@ -41,7 +41,6 @@ import java.util.Map;
 import java.util.Set;
 
 public final class DamengAgent extends BaseDatabaseAgent {
-    private static final String AGENT_VERSION = "9999.06.04.1-fix-default";
     private static final String DAMENG_CLASSIFIED_OBJECT_TYPE_SQL =
         "CASE WHEN o.OBJECT_TYPE = 'MATERIALIZED VIEW' OR (o.OBJECT_TYPE = 'VIEW' AND mv.MVIEW_NAME IS NOT NULL) "
             + "THEN 'MATERIALIZED_VIEW' ELSE o.OBJECT_TYPE END";
@@ -1379,14 +1378,6 @@ public final class DamengAgent extends BaseDatabaseAgent {
             ddl.append("\n");
         }
         ddl.append(statement);
-    }
-
-    private static String ensureStatementTerminator(String statement) {
-        String trimmed = coalesce(statement).trim();
-        if (trimmed.isEmpty() || trimmed.endsWith(";")) {
-            return trimmed;
-        }
-        return trimmed + ";";
     }
 
     private static boolean containsCommentOnTable(String ddl, String schema, String table) {

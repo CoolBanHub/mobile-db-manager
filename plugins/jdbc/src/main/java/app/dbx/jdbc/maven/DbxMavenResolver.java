@@ -87,8 +87,8 @@ public final class DbxMavenResolver {
             return;
         }
         Artifact artifact = node.getArtifact();
-        if (artifact != null && artifact.getFile() != null) {
-            artifacts.add(ResolvedArtifact.from(artifact, artifact.getFile()));
+        if (artifact != null && artifact.getPath() != null) {
+            artifacts.add(ResolvedArtifact.from(artifact, artifact.getPath().toFile()));
         }
         for (DependencyNode child : node.getChildren()) {
             collectRuntimeArtifacts(child, false, artifacts);

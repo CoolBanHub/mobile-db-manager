@@ -141,7 +141,6 @@ class EwkbWktDecoderTest {
         assertEquals("SRID=4326;POINT(116.397 39.908)", EwkbWktDecoder.decode(pgGeom));
     }
 
-    @SuppressWarnings("unused")
     public static final class FakePGgeometry {
         private final String value;
 

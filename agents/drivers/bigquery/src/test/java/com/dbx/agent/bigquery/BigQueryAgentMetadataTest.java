@@ -3,7 +3,6 @@ package com.dbx.agent.bigquery;
 import com.dbx.agent.test.TestSupport;
 import com.dbx.agent.ConnectParams;
 import com.dbx.agent.MetadataListConstraints;
-import com.dbx.agent.test.JdbcAgentFake;
 import com.dbx.agent.test.JdbcMetadataSqlFake;
 import java.sql.Connection;
 import java.util.List;

@@ -1,17 +1,9 @@
 package com.dbx.agent;
 
 import java.sql.Connection;
-import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 
 public abstract class ConfiguredJdbcAgent extends AbstractJdbcAgent {
     private final JdbcAgentProfile profile;
@@ -169,61 +161,6 @@ public abstract class ConfiguredJdbcAgent extends AbstractJdbcAgent {
     @Override
     protected Object resultValue(ResultSet rs, int index, int sqlType) {
         return super.resultValue(rs, index, sqlType);
-    }
-
-    private static String normalizeTableType(String type) {
-        if (type == null || type.trim().isEmpty()) {
-            return "TABLE";
-        }
-        if ("BASE TABLE".equals(type.toUpperCase(Locale.ROOT))) {
-            return "TABLE";
-        }
-        return type;
-    }
-
-    private static Integer intOrNull(ResultSet rs, String column) throws Exception {
-        Object value = rs.getObject(column);
-        return value instanceof Number ? ((Number) value).intValue() : null;
-    }
-
-    private static Integer characterLength(ResultSet rs) throws Exception {
-        String typeName = rs.getString("TYPE_NAME");
-        if (typeName == null) {
-            return null;
-        }
-        String normalized = typeName.toLowerCase(Locale.ROOT);
-        if (!normalized.contains("char") && !normalized.contains("text")) {
-            return null;
-        }
-        return intOrNull(rs, "COLUMN_SIZE");
-    }
-
-    private static String blankToNull(String value) {
-        return value == null || value.trim().isEmpty() ? null : value;
-    }
-
-    private static void addNonBlank(Set<String> values, String value) {
-        if (value != null && !value.trim().isEmpty()) {
-            values.add(value);
-        }
-    }
-
-    private static final class IndexColumn {
-        private final int ordinal;
-        private final String name;
-
-        private IndexColumn(int ordinal, String name) {
-            this.ordinal = ordinal;
-            this.name = name;
-        }
-
-        private int getOrdinal() {
-            return ordinal;
-        }
-
-        private String getName() {
-            return name;
-        }
     }
 
 }

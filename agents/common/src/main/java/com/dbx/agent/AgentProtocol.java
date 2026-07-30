@@ -201,6 +201,8 @@ public final class AgentProtocol {
         return new HandshakeResult(MULTI_SESSION_PROTOCOL_VERSION, MULTI_SESSION_PROTOCOL_VERSION, capabilities);
     }
 
+    // Serialized reflectively by Gson when the agent writes the handshake.
+    @SuppressWarnings("unused")
     public static final class HandshakeResult {
         private final int protocolVersion;
         private final int agentProtocolVersion;

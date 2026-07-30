@@ -8,7 +8,6 @@ import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.consumer.DefaultLitePullConsumer;
 import org.apache.rocketmq.client.consumer.DefaultMQPullConsumer;
 import org.apache.rocketmq.client.consumer.PullResult;
-import org.apache.rocketmq.client.consumer.PullStatus;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
 import org.apache.rocketmq.client.producer.SendResult;
 import org.apache.rocketmq.common.MixAll;
@@ -787,6 +786,7 @@ public final class RocketMqAgent {
         return result;
     }
 
+    @SuppressWarnings("deprecation")
     private static List<Map<String, Object>> queryMessagesByTopicTimeRange(
         JsonObject conn,
         String topic,
@@ -1633,6 +1633,7 @@ public final class RocketMqAgent {
         return Collections.singletonMap("ok", true);
     }
 
+    @SuppressWarnings("unchecked")
     private static Object deleteAcls(JsonObject params) throws Exception {
         DefaultMQAdminExt admin = requireAdmin();
         String brokerAddr = brokerAddr(params, admin);
@@ -1641,7 +1642,6 @@ public final class RocketMqAgent {
 
         int deleted = 0;
         if (filtersArray.isEmpty()) {
-            @SuppressWarnings("unchecked")
             Map<String, Object> listed = (Map<String, Object>) listAcls(params);
             List<Map<String, Object>> existing = (List<Map<String, Object>>) listed.get("acls");
             for (Map<String, Object> acl : existing) {
@@ -1709,6 +1709,7 @@ public final class RocketMqAgent {
         return consumer;
     }
 
+    @SuppressWarnings("deprecation")
     static DefaultMQPullConsumer buildPullConsumer(JsonObject conn) throws Exception {
         RPCHook rpcHook = buildRpcHook(conn);
         DefaultMQPullConsumer consumer = rpcHook != null
@@ -2383,10 +2384,6 @@ public final class RocketMqAgent {
         return topicAttributes;
     }
 
-    private static Map<String, Map<String, String>> collectTopicAttributes(DefaultMQAdminExt admin, JsonObject conn) {
-        return topicAttributesFromConfigs(collectBrokerTopicConfigs(admin, conn));
-    }
-
     private static void mergeTopicAttributes(
         Map<String, Map<String, String>> topicAttributes,
         Map<String, String> topicMessageTypes,
@@ -2592,6 +2589,8 @@ public final class RocketMqAgent {
         return value;
     }
 
+    // Serialized reflectively by Gson when the agent writes the handshake.
+    @SuppressWarnings("unused")
     private static final class HandshakeResult {
         private final int protocolVersion;
         private final int agentProtocolVersion;

@@ -2,7 +2,6 @@ package com.dbx.agent.snowflake;
 
 import com.dbx.agent.MetadataListConstraints;
 import com.dbx.agent.test.TestSupport;
-import com.dbx.agent.test.JdbcAgentFake;
 import com.dbx.agent.test.JdbcMetadataSqlFake;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;

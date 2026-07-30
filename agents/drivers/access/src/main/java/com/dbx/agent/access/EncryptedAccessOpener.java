@@ -10,7 +10,7 @@ import net.ucanaccess.jdbc.IJackcessOpenerInterface;
 public final class EncryptedAccessOpener implements IJackcessOpenerInterface {
     @Override
     public Database open(File file, String password) throws IOException {
-        DatabaseBuilder builder = new DatabaseBuilder(file);
+        DatabaseBuilder builder = DatabaseBuilder.newDatabase(file);
         // UCanAccess flushes changes at transaction boundaries, so Jackcess auto-sync is unnecessary overhead.
         builder.withAutoSync(false);
         builder.withCodecProvider(new CryptCodecProvider(password));

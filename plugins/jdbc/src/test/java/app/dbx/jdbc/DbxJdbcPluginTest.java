@@ -2319,6 +2319,8 @@ final class DbxJdbcPluginTest {
     }
 
     public static final class ErrorOnLoad {
+        // Read reflectively by Class.forName during the linkage-error test.
+        @SuppressWarnings("unused")
         private static final Object FAILURE = fail();
 
         private static Object fail() {

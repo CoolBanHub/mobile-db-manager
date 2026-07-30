@@ -748,6 +748,7 @@ class StandardJdbcMetadataTest {
         ));
     }
 
+    @SafeVarargs
     private static ResultSet rows(Map<String, Object>... rows) {
         return proxy(ResultSet.class, new MethodHandler() {
             private int index = -1;

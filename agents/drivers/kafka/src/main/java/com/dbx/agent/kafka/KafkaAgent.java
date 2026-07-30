@@ -7,7 +7,6 @@ import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.common.*;
 import org.apache.kafka.common.acl.*;
 import org.apache.kafka.common.config.ConfigResource;
-import org.apache.kafka.common.errors.*;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.resource.PatternType;
 import org.apache.kafka.common.resource.ResourcePattern;
@@ -537,7 +536,6 @@ public final class KafkaAgent {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    @SuppressWarnings("unchecked")
     private static void applyExtraProperties(JsonObject conn, Properties props) {
         JsonObject properties = conn.has("properties") && conn.get("properties").isJsonObject()
             ? conn.getAsJsonObject("properties") : null;
@@ -746,6 +744,7 @@ public final class KafkaAgent {
         return Collections.singletonMap("configs", configs);
     }
 
+    @SuppressWarnings("deprecation")
     private static Object alterTopicConfig(JsonObject params) throws Exception {
         AdminClient admin = requireAdmin();
         int timeout = requestTimeout(params);
@@ -898,7 +897,7 @@ public final class KafkaAgent {
                         p.put("msgRateIn", 0.0);
                         p.put("msgThroughputIn", 0.0);
                         p.put("clientVersion", "Kafka producer");
-                        p.put("partitions", new ArrayList<Integer>());
+                        p.put("partitions", new ArrayList<>());
                         p.put("lastTimestamp", producerState.lastTimestamp());
                         return p;
                     });
@@ -1613,11 +1612,6 @@ public final class KafkaAgent {
         return value == null ? fallback : value;
     }
 
-    private static long longOrDefault(JsonObject object, String key, long fallback) {
-        Long value = longOrNull(object, key);
-        return value == null ? fallback : value;
-    }
-
     private static boolean boolOrDefault(JsonObject object, String key, boolean fallback) {
         JsonElement element = object.get(key);
         return element == null || element.isJsonNull() ? fallback : element.getAsBoolean();
@@ -1627,6 +1621,8 @@ public final class KafkaAgent {
     // Inner types
     // -----------------------------------------------------------------------
 
+    // Serialized reflectively by Gson when the agent writes the handshake.
+    @SuppressWarnings("unused")
     private static final class HandshakeResult {
         private final int protocolVersion;
         private final int agentProtocolVersion;

@@ -1,6 +1,5 @@
 package com.dbx.agent.test;
 
-import com.dbx.agent.DatabaseAgent;
 import com.dbx.agent.ExecuteQueryOptions;
 import com.dbx.agent.JdbcExecutor;
 import com.dbx.agent.QueryPageOptions;
