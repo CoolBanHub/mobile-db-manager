@@ -56,6 +56,17 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // DBX Mobile direct-connect drivers. Credentials and JDBC connections stay
+    // inside the native process; the WebView only addresses connections by id.
+    implementation "org.postgresql:postgresql:42.7.7"
+    // MariaDB Connector/J supports both MariaDB and MySQL and maintains
+    // Android compatibility. Oracle Connector/J references java.sql.SQLType,
+    // which is absent from Android's java.sql subset and crashes at runtime.
+    // 3.5.8 eagerly compiles a regex that Android's ICU rejects during TLS startup.
+    // 3.5.6 keeps that validation lazy, so normal MySQL connections work on Android.
+    implementation "org.mariadb.jdbc:mariadb-java-client:3.5.6"
+    implementation "com.microsoft.sqlserver:mssql-jdbc:13.2.0.jre11"
+    implementation "com.github.mwiede:jsch:2.28.2"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
