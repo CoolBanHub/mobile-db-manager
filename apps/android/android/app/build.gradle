@@ -7,6 +7,106 @@ def releaseKeyPassword = System.getenv("DBX_ANDROID_KEY_PASSWORD")
 def releaseSigningConfigured = [releaseKeystorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it }
 def androidVersionCode = (System.getenv("DBX_ANDROID_VERSION_CODE") ?: "1").toInteger()
 
+configurations {
+    androidMariaDbDriver {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+    androidPostgresDriver {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+    androidSqlServerDriver {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+    androidMongoDriverCore {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
+def androidMariaDbDriverJar = tasks.register('androidMariaDbDriverJar', Zip) {
+    from {
+        configurations.androidMariaDbDriver.collect { zipTree(it) }
+    }
+    exclude 'org/mariadb/jdbc/pool/Pool.class'
+    exclude 'org/mariadb/jdbc/pool/Pool$*.class'
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    archiveFileName = 'mariadb-java-client-3.5.6-android.jar'
+    destinationDirectory = layout.buildDirectory.dir('generated/android-compatible-drivers')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def androidPostgresDriverJar = tasks.register('androidPostgresDriverJar', Zip) {
+    from {
+        configurations.androidPostgresDriver.collect { zipTree(it) }
+    }
+    exclude 'org/postgresql/util/PGPropertyMaxResultBufferParser.class'
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    archiveFileName = 'postgresql-42.7.7-android.jar'
+    destinationDirectory = layout.buildDirectory.dir('generated/android-compatible-drivers')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def androidSqlServerDriverJar = tasks.register('androidSqlServerDriverJar', Zip) {
+    from {
+        configurations.androidSqlServerDriver.collect { zipTree(it) }
+    }
+    exclude 'com/microsoft/sqlserver/jdbc/MaxResultBufferParser.class'
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    archiveFileName = 'mssql-jdbc-13.2.0-android.jar'
+    destinationDirectory = layout.buildDirectory.dir('generated/android-compatible-drivers')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def androidMongoDriverCoreJar = tasks.register('androidMongoDriverCoreJar', Zip) {
+    from {
+        configurations.androidMongoDriverCore.collect { zipTree(it) }
+    }
+    exclude 'com/mongodb/internal/management/jmx/JMXMBeanServer.class'
+    exclude 'com/mongodb/management/JMXConnectionPoolListener.class'
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    archiveFileName = 'mongodb-driver-core-3.12.14-android.jar'
+    destinationDirectory = layout.buildDirectory.dir('generated/android-compatible-drivers')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def androidMariaDbDriverFiles = files(androidMariaDbDriverJar.flatMap { it.archiveFile })
+androidMariaDbDriverFiles.builtBy(androidMariaDbDriverJar)
+
+def androidPostgresDriverFiles = files(androidPostgresDriverJar.flatMap { it.archiveFile })
+androidPostgresDriverFiles.builtBy(androidPostgresDriverJar)
+
+def androidSqlServerDriverFiles = files(androidSqlServerDriverJar.flatMap { it.archiveFile })
+androidSqlServerDriverFiles.builtBy(androidSqlServerDriverJar)
+
+def androidMongoDriverCoreFiles = files(androidMongoDriverCoreJar.flatMap { it.archiveFile })
+androidMongoDriverCoreFiles.builtBy(androidMongoDriverCoreJar)
+
+// AGP does not create these directories when generated file dependencies
+// require no desugaring output, but the following DEX merge task validates them.
+['debug', 'release'].each { variant ->
+    def taskName = "desugar${variant.capitalize()}FileDependencies"
+    layout.buildDirectory
+            .dir("intermediates/external_file_lib_dex_archives/${variant}/${taskName}")
+            .get()
+            .asFile
+            .mkdirs()
+}
+
 android {
     namespace = "com.houtsider.dbx"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -52,21 +152,25 @@ dependencies {
     implementation project(':capacitor-android')
     // DBX Mobile direct-connect drivers. Credentials and JDBC connections stay
     // inside the native process; the WebView only addresses connections by id.
-    implementation "org.postgresql:postgresql:42.7.7"
+    androidPostgresDriver "org.postgresql:postgresql:42.7.7"
+    implementation androidPostgresDriverFiles
     // MariaDB Connector/J supports both MariaDB and MySQL and maintains
     // Android compatibility. Oracle Connector/J references java.sql.SQLType,
     // which is absent from Android's java.sql subset and crashes at runtime.
     // 3.5.8 eagerly compiles a regex that Android's ICU rejects during TLS startup.
     // 3.5.6 keeps that validation lazy, so normal MySQL connections work on Android.
-    implementation "org.mariadb.jdbc:mariadb-java-client:3.5.6"
-    implementation "com.microsoft.sqlserver:mssql-jdbc:13.2.0.jre11"
-    implementation "org.mongodb:mongodb-driver-sync:3.12.14"
+    androidMariaDbDriver "org.mariadb.jdbc:mariadb-java-client:3.5.6"
+    implementation androidMariaDbDriverFiles
+    androidSqlServerDriver "com.microsoft.sqlserver:mssql-jdbc:13.2.0.jre11"
+    implementation androidSqlServerDriverFiles
+    androidMongoDriverCore "org.mongodb:mongodb-driver-core:3.12.14"
+    implementation("org.mongodb:mongodb-driver-sync:3.12.14") {
+        exclude group: "org.mongodb", module: "mongodb-driver-core"
+    }
+    implementation androidMongoDriverCoreFiles
     implementation "com.github.mwiede:jsch:2.28.2"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
-    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
-    androidTestImplementation "androidx.test.espresso:espresso-intents:$androidxEspressoCoreVersion"
-    androidTestImplementation "androidx.test:rules:1.7.0"
     implementation project(':capacitor-cordova-android-plugins')
 }
 
