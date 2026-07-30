@@ -493,7 +493,6 @@ mod tests {
             password_disabled: false,
             password_hash: RwLock::new(None),
             sessions: RwLock::new(HashSet::new()),
-            mobile_sessions: RwLock::new(HashMap::new()),
             sse_channels: RwLock::new(HashMap::new()),
             transfer_progress_channels: RwLock::new(HashMap::new()),
             table_import_channels: RwLock::new(HashMap::new()),

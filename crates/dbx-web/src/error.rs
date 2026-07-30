@@ -18,18 +18,6 @@ impl AppError {
     pub fn not_found(msg: impl Into<String>) -> Self {
         AppError { message: msg.into(), status: StatusCode::NOT_FOUND }
     }
-
-    pub fn request_timeout(msg: impl Into<String>) -> Self {
-        AppError { message: msg.into(), status: StatusCode::REQUEST_TIMEOUT }
-    }
-
-    pub fn payload_too_large(msg: impl Into<String>) -> Self {
-        AppError { message: msg.into(), status: StatusCode::PAYLOAD_TOO_LARGE }
-    }
-
-    pub fn bad_gateway(msg: impl Into<String>) -> Self {
-        AppError { message: msg.into(), status: StatusCode::BAD_GATEWAY }
-    }
 }
 
 impl IntoResponse for AppError {
