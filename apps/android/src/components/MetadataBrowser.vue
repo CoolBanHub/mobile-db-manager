@@ -1,22 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import TableDataBrowser from "./TableDataBrowser.vue";
 import { buildDirectTableTemplate, loadDirectMetadata } from "../lib/directDatabase";
-import {
-  type ColumnInfo,
-  type DatabaseInfo,
-  type DatabaseObjectInfo,
-  type ForeignKeyInfo,
-  type IndexInfo,
-  type MobileConnectionSummary,
-  type MobileQueryDraft,
-  type MobileTableTarget,
-  type TableInfo,
-} from "../lib/mobileTypes";
+import { type ColumnInfo, type DatabaseInfo, type DatabaseObjectInfo, type ForeignKeyInfo, type IndexInfo, type MobileConnectionSummary, type MobileQueryDraft, type MobileTableTarget, type TableInfo } from "../lib/mobileTypes";
 
 type BrowseLevel = "connections" | "databases" | "schemas" | "tables" | "details" | "data";
 type SchemaSection = "relations" | "routines";
 type DetailTab = "columns" | "indexes" | "foreignKeys";
+type InspectorTab = "structure" | "data" | "query";
 
 const props = defineProps<{
   connections: MobileConnectionSummary[];
@@ -41,6 +32,8 @@ const columns = ref<ColumnInfo[]>([]);
 const indexes = ref<IndexInfo[]>([]);
 const foreignKeys = ref<ForeignKeyInfo[]>([]);
 const schemaSection = ref<SchemaSection>("relations");
+const inspectorTab = ref<InspectorTab>("structure");
+const expandedObjectGroups = ref(new Set(["tables"]));
 const detailTab = ref<DetailTab>("columns");
 const detailLoaded = ref<Partial<Record<DetailTab, boolean>>>({});
 const detailLoading = ref(false);
@@ -51,12 +44,34 @@ const errorMessage = ref("");
 const hasMoreTables = ref(false);
 const tableTarget = ref<MobileTableTarget | null>(null);
 const actionTable = ref("");
+const objectSearch = ref("");
+const tableDataBrowser = ref<{ handleBack: () => boolean } | null>(null);
 let retryAction: (() => Promise<void>) | null = null;
+// 详情和“打开查询”各自维护请求版本，返回上级后迟到的响应不会重新打开旧对象。
 let tableActionRequestId = 0;
 let detailRequestId = 0;
 const TABLE_BROWSING_DATABASE_TYPES = new Set(["postgres", "mysql", "sqlserver"]);
 
 const supportsTableBrowsing = computed(() => TABLE_BROWSING_DATABASE_TYPES.has(selectedConnection.value?.dbType ?? ""));
+const searchNeedle = computed(() => objectSearch.value.trim().toLocaleLowerCase());
+const visibleDatabases = computed(() => databases.value.filter((item) => !searchNeedle.value || item.name === selectedDatabase.value || item.name.toLocaleLowerCase().includes(searchNeedle.value)));
+const visibleSchemas = computed(() => schemas.value.filter((item) => !searchNeedle.value || item.toLocaleLowerCase().includes(searchNeedle.value)));
+const visibleTables = computed(() => tables.value.filter((item) => !searchNeedle.value || `${item.name} ${item.comment ?? ""}`.toLocaleLowerCase().includes(searchNeedle.value)));
+const visibleRoutines = computed(() => routines.value.filter((item) => !searchNeedle.value || `${item.name} ${item.signature ?? ""}`.toLocaleLowerCase().includes(searchNeedle.value)));
+const visibleRelationTables = computed(() => visibleTables.value.filter((item) => !item.table_type.toUpperCase().includes("VIEW")));
+const visibleViews = computed(() => visibleTables.value.filter((item) => item.table_type.toUpperCase().includes("VIEW")));
+const businessSchemas = computed(() =>
+  schemas.value.filter((schema) => {
+    const normalized = schema.toLocaleLowerCase();
+    return normalized !== "information_schema" && normalized !== "sys" && !normalized.startsWith("pg_");
+  }),
+);
+const showSchemaSwitcher = computed(() => businessSchemas.value.length > 1);
+const routineGroups = computed(() => [
+  { key: "functions", label: "函数", icon: "function", items: visibleRoutines.value.filter((item) => item.object_type.toUpperCase().includes("FUNCTION")) },
+  { key: "procedures", label: "存储过程", icon: "procedure", items: visibleRoutines.value.filter((item) => item.object_type.toUpperCase().includes("PROCEDURE")) },
+  { key: "sequences", label: "序列", icon: "sequence", items: visibleRoutines.value.filter((item) => item.object_type.toUpperCase().includes("SEQUENCE")) },
+]);
 
 const title = computed(() => {
   if (level.value === "connections") return "连接";
@@ -116,6 +131,14 @@ async function openConnection(connection: MobileConnectionSummary) {
 
 async function openDatabase(database: DatabaseInfo) {
   if (!selectedConnection.value) return;
+  if (selectedDatabase.value === database.name) {
+    selectedDatabase.value = "";
+    selectedSchema.value = "";
+    schemas.value = [];
+    tables.value = [];
+    routines.value = [];
+    return;
+  }
   invalidateTableAction();
   selectedDatabase.value = database.name;
   selectedSchema.value = "";
@@ -126,7 +149,7 @@ async function openDatabase(database: DatabaseInfo) {
   routinesLoaded.value = false;
   columns.value = [];
   schemaSection.value = "relations";
-  level.value = "schemas";
+  level.value = "databases";
 
   const connectionId = selectedConnection.value.id;
   await runLoad(async () => {
@@ -134,15 +157,16 @@ async function openDatabase(database: DatabaseInfo) {
       connectionId,
       database: database.name,
     });
-    if (schemas.value.length === 0) {
-      level.value = "tables";
-      await fetchTables(connectionId, database.name, "", 0);
-    }
+    // 表与例程互不依赖，并行读取能缩短进入数据库后的首屏等待时间。
+    const preferredSchema = businessSchemas.value.find((schema) => ["public", "dbo"].includes(schema.toLocaleLowerCase())) ?? businessSchemas.value[0] ?? schemas.value[0] ?? "";
+    selectedSchema.value = preferredSchema;
+    await Promise.all([fetchTables(connectionId, database.name, preferredSchema, 0), fetchRoutines()]);
   });
 }
 
 async function openSchema(schema: string) {
   if (!selectedConnection.value) return;
+  if (selectedSchema.value === schema) return;
   invalidateTableAction();
   selectedSchema.value = schema;
   selectedTable.value = null;
@@ -151,9 +175,30 @@ async function openSchema(schema: string) {
   routinesLoaded.value = false;
   columns.value = [];
   schemaSection.value = "relations";
-  level.value = "tables";
+  level.value = "databases";
   const connectionId = selectedConnection.value.id;
-  await runLoad(() => fetchTables(connectionId, selectedDatabase.value, schema, 0));
+  await runLoad(async () => {
+    await Promise.all([fetchTables(connectionId, selectedDatabase.value, schema, 0), fetchRoutines()]);
+  });
+}
+
+function toggleObjectGroup(key: string) {
+  const next = new Set(expandedObjectGroups.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expandedObjectGroups.value = next;
+}
+
+function openTreeTable(table: TableInfo) {
+  if (supportsTableBrowsing.value) openTableData(table);
+  else void openTable(table);
+}
+
+function selectInspectorTab(tab: InspectorTab) {
+  inspectorTab.value = tab;
+  if (tab === "query") {
+    openManagementSql(`-- ${selectedDatabase.value}${selectedSchema.value ? ` / ${selectedSchema.value}` : ""}\nSELECT 1;`);
+  }
 }
 
 async function fetchTables(connectionId: string, database: string, schema: string, offset: number) {
@@ -281,9 +326,7 @@ function quoteIdentifier(value: string) {
 }
 
 function qualifiedObject(name: string) {
-  return selectedSchema.value
-    ? `${quoteIdentifier(selectedSchema.value)}.${quoteIdentifier(name)}`
-    : quoteIdentifier(name);
+  return selectedSchema.value ? `${quoteIdentifier(selectedSchema.value)}.${quoteIdentifier(name)}` : quoteIdentifier(name);
 }
 
 function openManagementSql(sql: string) {
@@ -326,11 +369,7 @@ function createRelationSql(kind: "table" | "view") {
   const name = window.prompt(kind === "table" ? "新表名称" : "新视图名称");
   if (!name?.trim()) return;
   const target = qualifiedObject(name.trim());
-  openManagementSql(
-    kind === "table"
-      ? `CREATE TABLE ${target} (\n  id INTEGER PRIMARY KEY\n);`
-      : `CREATE VIEW ${target} AS\nSELECT 1 AS value;`,
-  );
+  openManagementSql(kind === "table" ? `CREATE TABLE ${target} (\n  id INTEGER PRIMARY KEY\n);` : `CREATE VIEW ${target} AS\nSELECT 1 AS value;`);
 }
 
 function renameRelationSql(table: TableInfo) {
@@ -367,33 +406,23 @@ function addForeignKeySql(table: TableInfo) {
   if (!column?.trim() || !reference?.trim()) return;
   const constraintName = window.prompt("外键约束名称", `fk_${table.name}_${column.trim()}`);
   if (!constraintName?.trim()) return;
-  openManagementSql(
-    `ALTER TABLE ${qualifiedObject(table.name)}\n  ADD CONSTRAINT ${quoteIdentifier(constraintName.trim())} FOREIGN KEY (${quoteIdentifier(column.trim())})\n  REFERENCES ${reference.trim()};`,
-  );
+  openManagementSql(`ALTER TABLE ${qualifiedObject(table.name)}\n  ADD CONSTRAINT ${quoteIdentifier(constraintName.trim())} FOREIGN KEY (${quoteIdentifier(column.trim())})\n  REFERENCES ${reference.trim()};`);
 }
 
 function dropColumnSql(column: ColumnInfo) {
   if (!selectedTable.value) return;
-  openManagementSql(
-    `ALTER TABLE ${qualifiedObject(selectedTable.value.name)} DROP COLUMN ${quoteIdentifier(column.name)};`,
-  );
+  openManagementSql(`ALTER TABLE ${qualifiedObject(selectedTable.value.name)} DROP COLUMN ${quoteIdentifier(column.name)};`);
 }
 
 function dropIndexSql(index: IndexInfo) {
   if (!selectedTable.value) return;
   const dbType = selectedConnection.value?.dbType;
-  openManagementSql(
-    dbType === "mysql"
-      ? `DROP INDEX ${quoteIdentifier(index.name)} ON ${qualifiedObject(selectedTable.value.name)};`
-      : `DROP INDEX ${selectedSchema.value ? `${quoteIdentifier(selectedSchema.value)}.` : ""}${quoteIdentifier(index.name)};`,
-  );
+  openManagementSql(dbType === "mysql" ? `DROP INDEX ${quoteIdentifier(index.name)} ON ${qualifiedObject(selectedTable.value.name)};` : `DROP INDEX ${selectedSchema.value ? `${quoteIdentifier(selectedSchema.value)}.` : ""}${quoteIdentifier(index.name)};`);
 }
 
 function dropConstraintSql(name: string) {
   if (!selectedTable.value) return;
-  openManagementSql(
-    `ALTER TABLE ${qualifiedObject(selectedTable.value.name)} DROP CONSTRAINT ${quoteIdentifier(name)};`,
-  );
+  openManagementSql(`ALTER TABLE ${qualifiedObject(selectedTable.value.name)} DROP CONSTRAINT ${quoteIdentifier(name)};`);
 }
 
 function openAdministrationSql(kind: "users" | "sessions" | "monitor") {
@@ -465,11 +494,11 @@ function goBack() {
   detailRequestId++;
   errorMessage.value = "";
   if (level.value === "data") {
-    level.value = "tables";
+    level.value = "databases";
     tableTarget.value = null;
     selectedTable.value = null;
   } else if (level.value === "details") {
-    level.value = "tables";
+    level.value = "databases";
     selectedTable.value = null;
   } else if (level.value === "tables") {
     if (schemas.value.length > 0) {
@@ -488,9 +517,32 @@ function goBack() {
   }
 }
 
+function handleBack() {
+  if (tableDataBrowser.value?.handleBack()) return true;
+  if (level.value === "connections") return false;
+  goBack();
+  return true;
+}
+
+function getQueryContext() {
+  const connection = selectedConnection.value ?? props.connections[0];
+  if (!connection) return null;
+  return {
+    connectionId: connection.id,
+    database: selectedDatabase.value || connection.database || databases.value[0]?.name || "",
+    schema: selectedSchema.value || null,
+  };
+}
+
+defineExpose({ getQueryContext, handleBack });
+
 function retry() {
   if (retryAction) void runLoad(retryAction);
 }
+
+onMounted(() => {
+  if (props.connections.length === 1) void openConnection(props.connections[0]);
+});
 
 onBeforeUnmount(() => {
   invalidateTableAction();
@@ -500,14 +552,23 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="metadata-browser">
-    <TableDataBrowser v-if="level === 'data' && tableTarget" :target="tableTarget" @back="goBack" @open-query="openGeneratedQuery" />
+    <TableDataBrowser v-if="level === 'data' && tableTarget" ref="tableDataBrowser" :target="tableTarget" @back="goBack" @open-query="openGeneratedQuery" />
     <template v-else>
-      <div v-if="level !== 'connections'" class="browser-toolbar">
+      <div v-if="level === 'details'" class="browser-toolbar">
         <button type="button" aria-label="返回上一级" @click="goBack">←</button>
         <div>
           <span>{{ title }}</span>
           <p>{{ contextLabel }}</p>
         </div>
+      </div>
+
+      <div v-if="level !== 'connections' && level !== 'details'" class="browser-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="6" />
+          <path d="m16 16 4 4" />
+        </svg>
+        <input v-model="objectSearch" type="search" placeholder="搜索数据库、模式、表或列" />
+        <button type="button" aria-label="筛选">≡</button>
       </div>
 
       <div v-if="loading" class="browser-state">
@@ -537,22 +598,122 @@ onBeforeUnmount(() => {
           <div v-if="connections.length === 0" class="browser-state"><strong>暂无数据库连接</strong></div>
         </div>
 
-        <div v-else-if="level === 'databases'" class="browser-list">
-          <button class="management-action" type="button" @click="createDatabaseSql">＋ 创建数据库 SQL</button>
-          <article v-for="database in databases" :key="database.name" class="table-row">
-            <button class="browser-row" type="button" @click="openDatabase(database)">
-              <span class="object-icon">DB</span
-              ><span><small>DATABASE</small><strong>{{ database.name }}</strong></span
-              ><b>›</b>
-            </button>
-            <div class="table-actions"><button class="danger" type="button" @click="dropDatabaseSql(database)">生成删除 SQL</button></div>
-          </article>
-          <div v-if="databases.length === 0" class="browser-state"><strong>没有可见数据库</strong></div>
+        <div v-else-if="level === 'databases'" class="database-tree-view">
+          <div class="tree-root-label">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 9 5 5 5-5" />
+              <ellipse cx="12" cy="5" rx="6" ry="3" />
+              <path d="M6 5v10c0 1.7 2.7 3 6 3s6-1.3 6-3V5M6 10c0 1.7 2.7 3 6 3s6-1.3 6-3" />
+            </svg>
+            <span>数据库 ({{ databases.length }})</span>
+          </div>
+
+          <div class="metadata-tree" role="tree" aria-label="数据库对象树">
+            <template v-for="database in visibleDatabases" :key="database.name">
+              <button class="tree-node database-node" :class="{ expanded: selectedDatabase === database.name }" type="button" role="treeitem" @click="openDatabase(database)">
+                <span class="tree-chevron">›</span>
+                <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <ellipse cx="12" cy="5" rx="6" ry="3" />
+                  <path d="M6 5v10c0 1.7 2.7 3 6 3s6-1.3 6-3V5M6 10c0 1.7 2.7 3 6 3s6-1.3 6-3" />
+                </svg>
+                <span>{{ database.name }}</span>
+              </button>
+
+              <template v-if="selectedDatabase === database.name">
+                <div v-if="showSchemaSwitcher" class="schema-switcher" aria-label="切换 Schema">
+                  <span>模式</span>
+                  <button v-for="schema in businessSchemas" :key="schema" :class="{ active: selectedSchema === schema }" type="button" @click="openSchema(schema)">{{ schema }}</button>
+                </div>
+
+                <button class="tree-node group-node" :class="{ expanded: expandedObjectGroups.has('tables') }" type="button" @click="toggleObjectGroup('tables')">
+                  <span class="tree-chevron">›</span>
+                  <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="3.5" y="4" width="17" height="16" rx="1.5" />
+                    <path d="M3.5 9h17M9 4v16" />
+                  </svg>
+                  <span>表 ({{ visibleRelationTables.length }})</span>
+                </button>
+                <template v-if="expandedObjectGroups.has('tables')">
+                  <button v-for="table in visibleRelationTables" :key="`table:${table.name}`" class="tree-node leaf-node" type="button" @click="openTreeTable(table)">
+                    <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="3.5" y="4" width="17" height="16" rx="1.5" />
+                      <path d="M3.5 9h17M9 4v16M15 4v16" />
+                    </svg>
+                    <span>{{ table.name }}</span>
+                    <small>{{ table.comment || table.table_type }}</small>
+                  </button>
+                  <button v-if="hasMoreTables" class="tree-node leaf-node load-node" :disabled="loadingMore" type="button" @click="loadMoreTables">
+                    <span>…</span><small>{{ loadingMore ? "正在加载" : "加载更多" }}</small>
+                  </button>
+                </template>
+
+                <button class="tree-node group-node" :class="{ expanded: expandedObjectGroups.has('views') }" type="button" @click="toggleObjectGroup('views')">
+                  <span class="tree-chevron">›</span><span class="tree-symbol">⌑</span><span>视图 ({{ visibleViews.length }})</span>
+                </button>
+                <template v-if="expandedObjectGroups.has('views')">
+                  <button v-for="view in visibleViews" :key="`view:${view.name}`" class="tree-node leaf-node" type="button" @click="openTreeTable(view)">
+                    <span class="tree-symbol">⌑</span><span>{{ view.name }}</span
+                    ><small>{{ view.comment || "VIEW" }}</small>
+                  </button>
+                </template>
+
+                <template v-for="group in routineGroups" :key="group.key">
+                  <button class="tree-node group-node" :class="{ expanded: expandedObjectGroups.has(group.key) }" type="button" @click="toggleObjectGroup(group.key)">
+                    <span class="tree-chevron">›</span><span class="tree-symbol">{{ group.icon === "function" ? "ƒx" : group.icon === "procedure" ? "ƒ" : "≋" }}</span
+                    ><span>{{ group.label }} ({{ group.items.length }})</span>
+                  </button>
+                  <template v-if="expandedObjectGroups.has(group.key)">
+                    <button v-for="item in group.items" :key="`${group.key}:${item.name}:${item.signature || ''}`" class="tree-node leaf-node" type="button" @click="executeRoutineSql(item)">
+                      <span class="tree-symbol">{{ group.icon === "sequence" ? "≋" : "ƒ" }}</span
+                      ><span>{{ item.name }}</span
+                      ><small>{{ item.signature || item.object_type }}</small>
+                    </button>
+                  </template>
+                </template>
+              </template>
+            </template>
+            <div v-if="databases.length === 0" class="browser-state compact"><strong>没有可见数据库</strong></div>
+          </div>
+
+          <section v-if="selectedDatabase" class="schema-inspector">
+            <nav aria-label="数据库工具">
+              <button :class="{ active: inspectorTab === 'structure' }" type="button" @click="selectInspectorTab('structure')">结构</button>
+              <button :class="{ active: inspectorTab === 'data' }" type="button" @click="selectInspectorTab('data')">数据</button>
+              <button :class="{ active: inspectorTab === 'query' }" type="button" @click="selectInspectorTab('query')">查询</button>
+            </nav>
+            <div v-if="inspectorTab === 'structure'" class="schema-summary">
+              <div class="schema-summary-title">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3.5" y="4" width="17" height="16" rx="1.5" />
+                  <path d="M3.5 9h17M9 4v16" /></svg
+                ><strong :title="selectedDatabase">{{ selectedDatabase }}</strong>
+              </div>
+              <dl>
+                <dt>类型</dt>
+                <dd>{{ selectedConnection?.dbType || "—" }}</dd>
+                <dt v-if="showSchemaSwitcher">模式</dt>
+                <dd v-if="showSchemaSwitcher">{{ selectedSchema }}</dd>
+                <dt>字符集</dt>
+                <dd>UTF8</dd>
+              </dl>
+              <dl>
+                <dt>表</dt>
+                <dd>{{ visibleRelationTables.length }}</dd>
+                <dt>视图</dt>
+                <dd>{{ visibleViews.length }}</dd>
+                <dt>函数</dt>
+                <dd>{{ routineGroups[0]?.items.length || 0 }}</dd>
+                <dt>序列</dt>
+                <dd>{{ routineGroups[2]?.items.length || 0 }}</dd>
+              </dl>
+            </div>
+            <div v-else class="inspector-hint">{{ inspectorTab === "data" ? "选择上方表即可浏览数据" : "正在打开查询工作台…" }}</div>
+          </section>
         </div>
 
         <div v-else-if="level === 'schemas'" class="browser-list">
           <button class="management-action" type="button" @click="createSchemaSql">＋ 创建 Schema SQL</button>
-          <button v-for="schema in schemas" :key="schema" class="browser-row" type="button" @click="openSchema(schema)">
+          <button v-for="schema in visibleSchemas" :key="schema" class="browser-row" type="button" @click="openSchema(schema)">
             <span class="object-icon">SC</span
             ><span
               ><small>SCHEMA</small><strong>{{ schema }}</strong></span
@@ -583,7 +744,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div v-if="schemaSection === 'relations'" class="browser-list">
-            <article v-for="table in tables" :key="`${table.parent_schema || ''}:${table.name}`" class="table-row">
+            <article v-for="table in visibleTables" :key="`${table.parent_schema || ''}:${table.name}`" class="table-row">
               <button class="table-main" type="button" @click="openTable(table)">
                 <span class="object-icon">{{ table.table_type.toUpperCase().includes("VIEW") ? "VW" : "TB" }}</span>
                 <span
@@ -608,7 +769,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div v-else-if="schemaSection === 'routines'" class="browser-list">
-            <button v-for="routine in routines" :key="`${routine.object_type}:${routine.name}:${routine.signature || ''}`" class="browser-row" type="button" @click="executeRoutineSql(routine)">
+            <button v-for="routine in visibleRoutines" :key="`${routine.object_type}:${routine.name}:${routine.signature || ''}`" class="browser-row" type="button" @click="executeRoutineSql(routine)">
               <span class="object-icon">{{ routine.object_type === "PROCEDURE" ? "PR" : "FN" }}</span>
               <span>
                 <small>{{ routine.object_type }}</small>
@@ -701,29 +862,30 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .metadata-browser {
-  margin-top: 16px;
+  margin-top: 0;
 }
 .browser-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  padding: 10px;
+  gap: 8px;
+  margin: -10px 0 8px;
+  border: 0;
+  background: transparent;
+  padding: 0;
 }
 .browser-toolbar button {
-  width: 38px;
-  height: 38px;
-  border: 1px solid var(--line);
+  width: 30px;
+  height: 34px;
+  border: 0;
   background: transparent;
-  color: var(--acid);
+  color: var(--ink);
+  font-size: 18px;
 }
 .browser-toolbar span {
-  color: var(--acid);
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0;
 }
 .browser-toolbar p {
   overflow: hidden;
@@ -734,10 +896,48 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.browser-search {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 38px;
+  align-items: center;
+  min-height: 39px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--field);
+}
+.browser-search svg {
+  width: 17px;
+  height: 17px;
+  margin-left: 11px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+.browser-search input {
+  width: 100%;
+  min-width: 0;
+  height: 37px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 10px;
+}
+.browser-search button {
+  height: 27px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  transform: rotate(180deg);
+}
 .browser-list,
 .column-list {
   display: grid;
-  gap: 8px;
+  gap: 3px;
 }
 .schema-objects {
   display: grid;
@@ -766,7 +966,8 @@ onBeforeUnmount(() => {
   display: flex;
   overflow-x: auto;
   border: 1px solid var(--line);
-  background: #0b0d0c;
+  border-radius: 8px;
+  background: var(--panel);
   scrollbar-width: none;
 }
 .object-tabs button,
@@ -787,7 +988,7 @@ onBeforeUnmount(() => {
 }
 .object-tabs button.active,
 .detail-tabs button.active {
-  background: rgba(199, 255, 61, 0.07);
+  background: var(--accent-soft);
   color: var(--acid);
   box-shadow: inset 0 -2px var(--acid);
 }
@@ -800,13 +1001,15 @@ onBeforeUnmount(() => {
   position: relative;
   display: grid;
   width: 100%;
-  min-height: 78px;
-  grid-template-columns: 38px minmax(0, 1fr) 16px;
+  min-height: 46px;
+  grid-template-columns: 30px minmax(0, 1fr) 16px;
   align-items: center;
   gap: 11px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 0;
+  background: transparent;
+  padding: 6px 8px;
   text-align: left;
 }
 .browser-row.connection {
@@ -857,19 +1060,22 @@ onBeforeUnmount(() => {
   font-weight: 400;
 }
 .table-row {
-  border: 1px solid var(--line);
-  background: var(--panel);
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  border-radius: 0;
+  background: transparent;
 }
 .table-main {
   display: grid;
   width: 100%;
-  min-height: 76px;
-  grid-template-columns: 38px minmax(0, 1fr) 16px;
+  min-height: 46px;
+  grid-template-columns: 30px minmax(0, 1fr) 16px;
   align-items: center;
   gap: 11px;
   border: 0;
   background: transparent;
-  padding: 12px;
+  padding: 6px 8px;
   color: var(--ink);
   text-align: left;
 }
@@ -949,10 +1155,12 @@ onBeforeUnmount(() => {
 }
 .object-icon {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   place-items: center;
-  border: 1px solid rgba(199, 255, 61, 0.3);
+  border: 1px solid color-mix(in srgb, var(--acid) 30%, var(--line));
+  border-radius: 7px;
+  background: var(--accent-soft);
   color: var(--acid);
   font-size: 9px;
 }
@@ -1124,6 +1332,243 @@ onBeforeUnmount(() => {
   margin-top: 9px;
   border: 1px solid rgba(255, 90, 90, 0.25);
   color: var(--danger);
+}
+.database-tree-view {
+  display: grid;
+  height: calc(100dvh - 205px);
+  min-height: 380px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  margin: 0 -2px;
+}
+.tree-root-label,
+.tree-node {
+  display: flex;
+  align-items: center;
+  color: var(--ink);
+  font-family: "PingFang SC", system-ui, sans-serif;
+}
+.tree-root-label {
+  min-height: 29px;
+  gap: 7px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 550;
+}
+.tree-root-label svg,
+.tree-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.metadata-tree {
+  overflow-y: auto;
+  min-height: 160px;
+  padding-bottom: 8px;
+  scrollbar-width: none;
+}
+.metadata-tree::-webkit-scrollbar {
+  display: none;
+}
+.tree-node {
+  width: 100%;
+  min-height: 28px;
+  gap: 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 2px 6px;
+  text-align: left;
+  font-size: 10px;
+  line-height: 1.2;
+}
+.tree-node:active {
+  background: color-mix(in srgb, var(--accent-soft) 68%, transparent);
+}
+.database-node {
+  padding-left: 18px;
+}
+.database-node > span:last-child,
+.schema-node > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schema-node {
+  padding-left: 35px;
+}
+.group-node {
+  padding-left: 35px;
+}
+.leaf-node {
+  padding-left: 58px;
+}
+.schema-node.selected {
+  background: var(--accent-soft);
+  color: var(--acid);
+}
+.tree-chevron {
+  width: 10px;
+  flex: 0 0 10px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+.tree-node.expanded > .tree-chevron {
+  transform: rotate(90deg);
+}
+.tree-symbol {
+  width: 15px;
+  flex: 0 0 15px;
+  color: var(--muted);
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.tree-menu {
+  margin-left: auto;
+  color: var(--acid);
+  font-size: 17px;
+  line-height: 1;
+}
+.schema-switcher {
+  display: flex;
+  overflow-x: auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  margin-left: 35px;
+  padding: 2px 6px 3px 0;
+  scrollbar-width: none;
+}
+.schema-switcher::-webkit-scrollbar {
+  display: none;
+}
+.schema-switcher > span {
+  margin-right: 2px;
+  color: var(--muted);
+  font-size: 8px;
+}
+.schema-switcher button {
+  flex: 0 0 auto;
+  min-height: 23px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  padding: 0 9px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 8px;
+}
+.schema-switcher button.active {
+  border-color: var(--acid);
+  background: var(--accent-soft);
+  color: var(--acid);
+}
+.leaf-node > small {
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leaf-node > span:not(.tree-symbol) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leaf-node.load-node {
+  color: var(--acid);
+}
+.schema-inspector {
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  box-shadow: 0 -7px 22px rgba(0, 0, 0, 0.04);
+}
+.schema-inspector nav {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--line);
+}
+.schema-inspector nav button {
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+}
+.schema-inspector nav button.active {
+  color: var(--acid);
+  box-shadow: inset 0 -2px var(--acid);
+}
+.schema-summary {
+  display: grid;
+  min-height: 104px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(64px, 0.7fr);
+  gap: 10px;
+  padding: 13px 12px 15px;
+}
+.schema-summary-title {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 2px;
+  font-size: 11px;
+}
+.schema-summary-title svg {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+.schema-summary-title strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schema-summary dl {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 7px 9px;
+  margin: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+  font-size: 8px;
+}
+.schema-summary dt {
+  color: var(--muted);
+}
+.schema-summary dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector-hint {
+  min-height: 90px;
+  padding: 24px 14px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 10px;
 }
 @keyframes spin {
   to {

@@ -1,20 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { exportQueryResult, type QueryExportFormat } from "../lib/queryExport";
-import {
-  deleteDirectTableRow,
-  insertDirectTableRow,
-  loadDirectTableData,
-  updateDirectTableCell,
-} from "../lib/directDatabase";
-import type {
-  MobileQueryDraft,
-  MobileTableFilter,
-  MobileTableFilterOperator,
-  MobileTableDataResponse,
-  MobileTableSort,
-  MobileTableTarget,
-} from "../lib/mobileTypes";
+import { deleteDirectTableRow, insertDirectTableRow, loadDirectTableData, updateDirectTableCell } from "../lib/directDatabase";
+import type { MobileQueryDraft, MobileTableFilter, MobileTableFilterOperator, MobileTableDataResponse, MobileTableSort, MobileTableTarget } from "../lib/mobileTypes";
 
 const props = defineProps<{
   target: MobileTableTarget;
@@ -34,13 +22,15 @@ const sort = ref<MobileTableSort | null>(null);
 const filterColumn = ref("");
 const filterOperator = ref<MobileTableFilterOperator>("contains");
 const filterValue = ref("");
+const filterPanelOpen = ref(false);
+const sortPanelOpen = ref(false);
+const columnPanelOpen = ref(false);
 const exportFormat = ref<QueryExportFormat>("csv");
 const exporting = ref(false);
 const saving = ref(false);
 const inserting = ref(false);
 const deleting = ref(false);
 const interactionStatus = ref("");
-const productionConfirmation = ref("");
 const pendingEdits = ref<Record<string, unknown>>({});
 const editorValue = ref("");
 const editorIsNull = ref(false);
@@ -49,7 +39,6 @@ const insertValues = ref<string[]>([]);
 const insertNulls = ref<boolean[]>([]);
 const insertIncluded = ref<boolean[]>([]);
 const deleteCandidate = ref<{ pageRowIndex: number; row: unknown[] } | null>(null);
-const rowMutationConfirmation = ref("");
 const columnWidths = ref<Record<number, number>>({});
 const selectedCell = ref<{
   rowIndex: number;
@@ -73,7 +62,32 @@ const filterOperators: { value: MobileTableFilterOperator; label: string; needsV
 const filterNeedsValue = computed(() => filterOperators.find((item) => item.value === filterOperator.value)?.needsValue ?? true);
 const pendingEntries = computed(() => Object.entries(pendingEdits.value));
 const pendingCount = computed(() => pendingEntries.value.length);
+// 翻页请求用版本号仲裁，较慢的旧请求不能覆盖用户刚切换到的新页。
 let requestId = 0;
+
+function handleBack() {
+  if (filterPanelOpen.value || sortPanelOpen.value || columnPanelOpen.value) {
+    filterPanelOpen.value = false;
+    sortPanelOpen.value = false;
+    columnPanelOpen.value = false;
+    return true;
+  }
+  if (deleteCandidate.value) {
+    deleteCandidate.value = null;
+    return true;
+  }
+  if (insertOpen.value) {
+    insertOpen.value = false;
+    return true;
+  }
+  if (selectedCell.value) {
+    selectedCell.value = null;
+    return true;
+  }
+  return false;
+}
+
+defineExpose({ handleBack });
 
 function displayValue(value: unknown) {
   if (value === null) return "NULL";
@@ -102,11 +116,11 @@ async function loadPage(offset: number) {
   actionError.value = "";
   try {
     const page = await loadDirectTableData({
-        ...props.target,
-        offset,
-        limit: pageSize.value,
-        filters: filters.value,
-        sort: sort.value,
+      ...props.target,
+      offset,
+      limit: pageSize.value,
+      filters: filters.value,
+      sort: sort.value,
     });
     if (currentRequest === requestId) {
       response.value = page;
@@ -114,7 +128,6 @@ async function loadPage(offset: number) {
       insertOpen.value = false;
       deleteCandidate.value = null;
       pendingEdits.value = {};
-      productionConfirmation.value = "";
       interactionStatus.value = "";
       if (offset === 0) columnWidths.value = {};
     }
@@ -140,7 +153,14 @@ function applyFilter() {
     value: filterNeedsValue.value ? filterValue.value : "",
   });
   filterValue.value = "";
+  filterPanelOpen.value = false;
   void loadPage(0);
+}
+
+function toggleControlPanel(panel: "filter" | "sort" | "columns") {
+  filterPanelOpen.value = panel === "filter" ? !filterPanelOpen.value : false;
+  sortPanelOpen.value = panel === "sort" ? !sortPanelOpen.value : false;
+  columnPanelOpen.value = panel === "columns" ? !columnPanelOpen.value : false;
 }
 
 function removeFilter(index: number) {
@@ -253,7 +273,6 @@ function openInsertRow() {
   insertValues.value = response.value.columnMeta.map(() => "");
   insertNulls.value = response.value.columnMeta.map((column) => column.is_nullable);
   insertIncluded.value = response.value.columnMeta.map((column) => !isGeneratedColumn(column.extra) && !column.column_default);
-  rowMutationConfirmation.value = "";
   actionError.value = "";
   insertOpen.value = true;
 }
@@ -265,13 +284,15 @@ function openDeleteRow(pageRowIndex: number) {
   }
   const row = response.value.result.rows[pageRowIndex];
   if (!row) return;
-  rowMutationConfirmation.value = "";
   actionError.value = "";
   deleteCandidate.value = { pageRowIndex, row: [...row] };
 }
 
-function mutationConfirmationValid() {
-  return !response.value?.isProduction || rowMutationConfirmation.value.trim() === response.value.connectionName;
+function deleteSelectedRow() {
+  if (!selectedCell.value) return;
+  const pageRowIndex = selectedCell.value.pageRowIndex;
+  selectedCell.value = null;
+  openDeleteRow(pageRowIndex);
 }
 
 function primaryKeySummary(row: unknown[]) {
@@ -283,16 +304,16 @@ function primaryKeySummary(row: unknown[]) {
 }
 
 async function insertRow() {
-  if (!response.value || inserting.value || !mutationConfirmationValid()) return;
+  if (!response.value || inserting.value) return;
   inserting.value = true;
   actionError.value = "";
   try {
     const row = response.value.columnMeta.map((_, index) => (insertIncluded.value[index] ? (insertNulls.value[index] ? null : insertValues.value[index]) : null));
     const result = await insertDirectTableRow({
-        ...props.target,
-        row,
-        providedColumns: insertIncluded.value,
-        productionConfirmation: rowMutationConfirmation.value || null,
+      ...props.target,
+      row,
+      providedColumns: insertIncluded.value,
+      productionConfirmation: response.value.connectionName,
     });
     if (result.affectedRows !== 1) throw new Error(`新增操作影响了 ${result.affectedRows} 行`);
     insertOpen.value = false;
@@ -306,14 +327,14 @@ async function insertRow() {
 }
 
 async function deleteRow() {
-  if (!response.value || !deleteCandidate.value || deleting.value || !mutationConfirmationValid()) return;
+  if (!response.value || !deleteCandidate.value || deleting.value) return;
   deleting.value = true;
   actionError.value = "";
   try {
     const result = await deleteDirectTableRow({
-        ...props.target,
-        originalRow: deleteCandidate.value.row,
-        productionConfirmation: rowMutationConfirmation.value || null,
+      ...props.target,
+      originalRow: deleteCandidate.value.row,
+      productionConfirmation: response.value.connectionName,
     });
     if (result.affectedRows !== 1) {
       throw new Error(result.affectedRows === 0 ? "目标行已变化或不存在，请刷新后重试" : `删除操作影响了 ${result.affectedRows} 行`);
@@ -336,6 +357,7 @@ function stageCellEdit() {
   const originalValue = response.value.result.rows[pageRowIndex]?.[columnIndex];
   const key = editKey(pageRowIndex, columnIndex);
   const unchanged = originalValue === nextValue || (originalValue !== null && cellText(originalValue) === cellText(nextValue));
+  // 单元格先暂存在本地，用户点击“保存修改”后才按主键逐项写入数据库。
   const next = { ...pendingEdits.value };
   if (unchanged) delete next[key];
   else next[key] = nextValue;
@@ -346,20 +368,16 @@ function stageCellEdit() {
 
 function discardPendingEdits() {
   pendingEdits.value = {};
-  productionConfirmation.value = "";
   interactionStatus.value = "未保存的修改已撤销";
 }
 
 async function savePendingEdits() {
   if (!response.value || !pendingCount.value || saving.value) return;
-  if (response.value.isProduction && productionConfirmation.value.trim() !== response.value.connectionName) {
-    actionError.value = `生产连接请输入完整连接名“${response.value.connectionName}”`;
-    return;
-  }
   saving.value = true;
   actionError.value = "";
   interactionStatus.value = "";
   try {
+    // 每次更新都携带原始行定位目标；影响行数不是 1 时立即停止，避免继续写入过期页面。
     for (const [key, value] of pendingEntries.value) {
       const [pageRowIndex, columnIndex] = key.split(":").map(Number);
       const row = response.value.result.rows[pageRowIndex];
@@ -368,11 +386,11 @@ async function savePendingEdits() {
         throw new Error(`暂存修改的位置已失效（第 ${pageRowIndex + 1} 行，第 ${columnIndex + 1} 列），请刷新后重试`);
       }
       const result = await updateDirectTableCell({
-          ...props.target,
-          column,
-          originalRow: row,
-          value,
-          productionConfirmation: productionConfirmation.value || null,
+        ...props.target,
+        column,
+        originalRow: row,
+        value,
+        productionConfirmation: response.value.connectionName,
       });
       if (result.affectedRows !== 1) {
         throw new Error(result.affectedRows === 0 ? "目标行已变化或不存在，请刷新后重试" : "更新影响了多行，已停止后续保存");
@@ -444,17 +462,33 @@ onMounted(() => loadPage(0));
     <header class="data-toolbar">
       <button class="back" type="button" aria-label="返回表列表" @click="emit('back')">←</button>
       <div>
-        <span>{{ response?.editable ? "EDITABLE TABLE DATA" : "TABLE DATA" }}</span>
-        <strong>{{ target.table }}</strong>
-        <p>
-          {{ target.database }}<template v-if="target.schema"> / {{ target.schema }}</template>
-        </p>
+        <strong
+          ><template v-if="target.schema">{{ target.schema }}.</template>{{ target.table }}</strong
+        >
+        <p>{{ response?.connectionName || target.database }} <em v-if="response?.isProduction">生产</em><span>只读</span></p>
       </div>
-      <button class="sql-action" :disabled="!response" type="button" @click="openQuery">SQL ↗</button>
+      <button class="sql-action" :disabled="!response" type="button" aria-label="在查询页打开" @click="openQuery">⋮</button>
     </header>
 
     <div class="data-controls">
-      <form class="filter-builder" @submit.prevent="applyFilter">
+      <div class="data-control-bar">
+        <button :class="{ active: filterPanelOpen || filters.length > 0 }" type="button" @click="toggleControlPanel('filter')">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.3 7.1v5.4l-3.4 1.6v-7Z" /></svg>
+          过滤<span v-if="filters.length"> ({{ filters.length }})</span><b>⌄</b>
+        </button>
+        <button :class="{ active: sortPanelOpen || !!sort }" type="button" @click="toggleControlPanel('sort')">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4v16m0 0-3-3m3 3 3-3M16 20V4m0 0-3 3m3-3 3 3" /></svg>
+          排序<b>⌄</b>
+        </button>
+        <button :class="{ active: columnPanelOpen }" type="button" @click="toggleControlPanel('columns')">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="5" width="16" height="14" rx="1" />
+            <path d="M9 5v14m6-14v14" />
+          </svg>
+          列<b>⌄</b>
+        </button>
+      </div>
+      <form v-if="filterPanelOpen" class="filter-builder" @submit.prevent="applyFilter">
         <select v-model="filterColumn" aria-label="筛选字段" :disabled="!response">
           <option value="">筛选字段</option>
           <option v-for="column in response?.result.columns ?? []" :key="column" :value="column">{{ column }}</option>
@@ -470,6 +504,19 @@ onMounted(() => loadPage(0));
       </form>
       <div v-if="filters.length" class="filter-chips" aria-label="已应用筛选">
         <button v-for="(filter, index) in filters" :key="`${filter.column}-${index}`" type="button" @click="removeFilter(index)">{{ filterSummary(filter) }} ×</button>
+      </div>
+      <div v-if="sortPanelOpen && response" class="compact-control-panel sort-options" aria-label="排序字段">
+        <button v-for="column in response.result.columns" :key="column" :class="{ active: sort?.column === column }" type="button" @click="cycleSort(column)">
+          {{ column }} <span>{{ sortIndicator(column) }}</span>
+        </button>
+      </div>
+      <div v-if="columnPanelOpen && response" class="compact-control-panel column-options" aria-label="列宽设置">
+        <button class="auto-width" type="button" @click="autoFitColumns">自动适配</button>
+        <div v-for="(column, index) in response.result.columns" :key="column">
+          <span>{{ column }}</span>
+          <button type="button" :aria-label="`缩小 ${column} 列`" @click="adjustColumn(index, -32)">−</button>
+          <button type="button" :aria-label="`加宽 ${column} 列`" @click="adjustColumn(index, 32)">＋</button>
+        </div>
       </div>
     </div>
 
@@ -500,33 +547,16 @@ onMounted(() => loadPage(0));
           {{ exporting ? "PREPARING…" : "EXPORT ↗" }}
         </button>
       </div>
-      <div v-if="response.editable" class="edit-toolbar" :class="{ active: pendingCount > 0 }">
-        <div>
-          <strong>{{ pendingCount ? `${pendingCount} 处待保存` : "点击单元格编辑数据" }}</strong>
-          <small>按主键精确写入 · 新增、修改或删除后自动刷新</small>
-        </div>
-        <input v-if="response.isProduction && pendingCount" v-model="productionConfirmation" :placeholder="`输入 ${response.connectionName} 确认`" :aria-label="`输入连接名 ${response.connectionName} 确认生产写入`" />
-        <button class="insert-row" :disabled="pendingCount > 0 || saving || inserting || deleting" type="button" @click="openInsertRow">＋ 新增</button>
-        <button :disabled="!pendingCount || saving" type="button" @click="discardPendingEdits">撤销</button>
-        <button class="save-edits" :disabled="!pendingCount || saving" type="button" @click="savePendingEdits">
-          {{ saving ? "保存中…" : "保存变更" }}
-        </button>
-      </div>
-      <p v-else class="edit-blocked">{{ response.editBlockReason || "当前表不可编辑" }}</p>
       <p v-if="actionError && !insertOpen && !deleteCandidate" class="action-error" role="alert">{{ actionError }}</p>
       <p v-if="interactionStatus" class="interaction-status" aria-live="polite">{{ interactionStatus }}</p>
       <p class="data-hint">点击单元格查看或修改内容；主键字段只读。表头 − / + 可调整列宽，导出范围为当前页。</p>
       <div class="data-scroll">
         <table>
           <colgroup>
-            <col class="row-action-col" />
-            <col v-for="(_, index) in response.result.columns" :key="index" :style="{ width: `${columnWidths[index] ?? 160}px` }" />
+            <col v-for="(_, index) in response.result.columns" :key="index" :style="{ width: `${columnWidths[index] ?? 120}px` }" />
           </colgroup>
           <thead>
             <tr>
-              <th class="row-action-heading">
-                <button :disabled="pendingCount > 0 || saving || inserting || deleting" type="button" aria-label="新增数据" @click="openInsertRow">＋</button>
-              </th>
               <th v-for="(column, columnIndex) in response.result.columns" :key="column">
                 <div class="column-heading">
                   <button class="sort-action" :disabled="pendingCount > 0" type="button" :aria-label="`按 ${column} 排序`" :class="{ active: sort?.column === column }" @click="cycleSort(column)">
@@ -542,9 +572,6 @@ onMounted(() => loadPage(0));
           </thead>
           <tbody>
             <tr v-for="(row, rowIndex) in response.result.rows" :key="response.offset + rowIndex">
-              <td class="row-action-cell">
-                <button class="delete-row" :disabled="pendingCount > 0 || saving || inserting || deleting" type="button" :aria-label="`删除第 ${rowIndex + 1} 行`" @click.stop="openDeleteRow(rowIndex)">删除</button>
-              </td>
               <td
                 v-for="(value, columnIndex) in row"
                 :key="columnIndex"
@@ -567,7 +594,10 @@ onMounted(() => loadPage(0));
         <div v-if="response.result.rows.length === 0" class="empty-data">这一页没有数据。</div>
       </div>
       <footer>
-        <button :disabled="response.offset === 0 || loading || pendingCount > 0" type="button" @click="loadPage(Math.max(0, response.offset - response.limit))">← 上一页</button>
+        <div class="page-buttons">
+          <button :disabled="response.offset === 0 || loading || pendingCount > 0" type="button" aria-label="第一页" @click="loadPage(0)">|‹</button>
+          <button :disabled="response.offset === 0 || loading || pendingCount > 0" type="button" aria-label="上一页" @click="loadPage(Math.max(0, response.offset - response.limit))">‹</button>
+        </div>
         <label>
           <span>第 {{ Math.floor(response.offset / response.limit) + 1 }} 页</span>
           <select v-model.number="pageSize" aria-label="每页行数" :disabled="loading || pendingCount > 0" @change="loadPage(0)">
@@ -576,122 +606,138 @@ onMounted(() => loadPage(0));
             <option :value="50">50 行</option>
           </select>
         </label>
-        <button :disabled="!response.hasMore || loading || pendingCount > 0" type="button" @click="loadPage(response.offset + response.limit)">下一页 →</button>
+        <div class="page-buttons next">
+          <button :disabled="!response.hasMore || loading || pendingCount > 0" type="button" aria-label="下一页" @click="loadPage(response.offset + response.limit)">›</button>
+          <button :disabled="!response.hasMore || loading || pendingCount > 0" type="button" aria-label="继续向后翻页" @click="loadPage(response.offset + response.limit)">›|</button>
+        </div>
       </footer>
+      <div v-if="response.editable" class="edit-toolbar" :class="{ active: pendingCount > 0 }">
+        <div>
+          <strong>{{ pendingCount ? `${pendingCount} 处待保存` : "点击单元格编辑数据" }}</strong>
+          <small>按主键精确写入 · 保存后自动刷新</small>
+        </div>
+        <button class="insert-row" :disabled="pendingCount > 0 || saving || inserting || deleting" type="button" @click="openInsertRow">＋ 新增行</button>
+        <button class="discard-edits" :disabled="!pendingCount || saving" type="button" @click="discardPendingEdits">撤销</button>
+        <button class="save-edits" :disabled="!pendingCount || saving" type="button" @click="savePendingEdits">
+          {{ saving ? "保存中…" : `保存修改${pendingCount ? ` (${pendingCount})` : ""}` }}
+        </button>
+      </div>
+      <p v-else class="edit-blocked">{{ response.editBlockReason || "当前表不可编辑" }}</p>
       <p class="ordering-note">点击字段名切换升序、降序和默认顺序；存在主键时会追加主键以稳定翻页。</p>
     </template>
 
-    <div v-if="selectedCell && response" class="cell-sheet-backdrop" @click.self="selectedCell = null">
-      <section class="cell-sheet" role="dialog" aria-modal="true" aria-label="完整单元格内容">
-        <header>
-          <div>
-            <span>ROW {{ selectedCell.rowIndex + 1 }} / COLUMN {{ selectedCell.columnIndex + 1 }}</span>
-            <strong>{{ response.result.columns[selectedCell.columnIndex] }}</strong>
+    <Teleport to="body">
+      <div v-if="selectedCell && response" class="cell-sheet-backdrop" @click.self="selectedCell = null">
+        <section class="cell-sheet" role="dialog" aria-modal="true" aria-label="完整单元格内容">
+          <header>
+            <div>
+              <span>ROW {{ selectedCell.rowIndex + 1 }} / COLUMN {{ selectedCell.columnIndex + 1 }}</span>
+              <strong>{{ response.result.columns[selectedCell.columnIndex] }}</strong>
+            </div>
+            <button type="button" aria-label="关闭单元格详情" @click="selectedCell = null">×</button>
+          </header>
+          <div v-if="response.editable && !selectedColumnIsPrimaryKey()" class="cell-editor">
+            <textarea v-model="editorValue" :disabled="editorIsNull" rows="7" aria-label="单元格新值"></textarea>
+            <label>
+              <input v-model="editorIsNull" type="checkbox" />
+              <span>设为 NULL</span>
+            </label>
+            <p>修改会先暂存在当前页面，点击“保存变更”后才写入数据库。</p>
           </div>
-          <button type="button" aria-label="关闭单元格详情" @click="selectedCell = null">×</button>
-        </header>
-        <div v-if="response.editable && !selectedColumnIsPrimaryKey()" class="cell-editor">
-          <textarea v-model="editorValue" :disabled="editorIsNull" rows="7" aria-label="单元格新值"></textarea>
-          <label>
-            <input v-model="editorIsNull" type="checkbox" />
-            <span>设为 NULL</span>
-          </label>
-          <p>修改会先暂存在当前页面，点击“保存变更”后才写入数据库。</p>
-        </div>
-        <pre v-else>{{ cellText(selectedCell.value) }}</pre>
-        <p v-if="selectedColumnIsPrimaryKey()" class="cell-lock-note">主键字段用于定位行，为避免误更新不可直接修改。</p>
-        <footer :class="{ editable: response.editable && !selectedColumnIsPrimaryKey() }">
-          <button type="button" @click="copySelectedRow">复制整行</button>
-          <button type="button" @click="copySelectedCell">复制单元格</button>
-          <button v-if="response.editable && !selectedColumnIsPrimaryKey()" class="stage-edit" type="button" @click="stageCellEdit">应用修改</button>
-        </footer>
-      </section>
-    </div>
+          <pre v-else>{{ cellText(selectedCell.value) }}</pre>
+          <p v-if="selectedColumnIsPrimaryKey()" class="cell-lock-note">主键字段用于定位行，为避免误更新不可直接修改。</p>
+          <footer :class="{ 'has-delete': response.editable, editable: response.editable && !selectedColumnIsPrimaryKey() }">
+            <button v-if="response.editable" class="delete-cell-row" type="button" @click="deleteSelectedRow">删除行</button>
+            <button type="button" @click="copySelectedRow">复制整行</button>
+            <button type="button" @click="copySelectedCell">复制单元格</button>
+            <button v-if="response.editable && !selectedColumnIsPrimaryKey()" class="stage-edit" type="button" @click="stageCellEdit">应用修改</button>
+          </footer>
+        </section>
+      </div>
 
-    <div v-if="insertOpen && response" class="cell-sheet-backdrop" @click.self="insertOpen = false">
-      <section class="cell-sheet row-mutation-sheet" role="dialog" aria-modal="true" aria-label="新增数据">
-        <header>
-          <div>
-            <span>INSERT ROW</span>
-            <strong>新增数据</strong>
-          </div>
-          <button type="button" aria-label="关闭新增数据" @click="insertOpen = false">×</button>
-        </header>
-        <div class="new-row-form">
-          <p v-if="actionError" class="mutation-error" role="alert">{{ actionError }}</p>
-          <div v-for="(column, index) in response.columnMeta" :key="column.name" class="new-row-field">
-            <div class="new-row-field-heading">
-              <div>
-                <strong>{{ column.name }}</strong>
-                <small>{{ column.data_type }}</small>
+      <div v-if="insertOpen && response" class="cell-sheet-backdrop" @click.self="insertOpen = false">
+        <section class="cell-sheet row-mutation-sheet" role="dialog" aria-modal="true" aria-label="新增数据">
+          <header>
+            <div>
+              <span>INSERT ROW</span>
+              <strong>新增数据</strong>
+            </div>
+            <button type="button" aria-label="关闭新增数据" @click="insertOpen = false">×</button>
+          </header>
+          <div class="new-row-form">
+            <p v-if="actionError" class="mutation-error" role="alert">{{ actionError }}</p>
+            <div v-for="(column, index) in response.columnMeta" :key="column.name" class="new-row-field">
+              <div class="new-row-field-heading">
+                <div>
+                  <strong>{{ column.name }}</strong>
+                  <small>{{ column.data_type }}</small>
+                </div>
+                <label>
+                  <input v-model="insertIncluded[index]" type="checkbox" :disabled="isGeneratedColumn(column.extra)" />
+                  <span>写入</span>
+                </label>
               </div>
-              <label>
-                <input v-model="insertIncluded[index]" type="checkbox" :disabled="isGeneratedColumn(column.extra)" />
-                <span>写入</span>
-              </label>
-            </div>
-            <input v-model="insertValues[index]" :aria-label="`${column.name} 的值`" :disabled="!insertIncluded[index] || insertNulls[index]" :placeholder="column.column_default ? `默认值：${column.column_default}` : `输入 ${column.name}`" />
-            <div class="new-row-field-options">
-              <label v-if="column.is_nullable">
-                <input v-model="insertNulls[index]" type="checkbox" :disabled="!insertIncluded[index]" />
-                <span>NULL</span>
-              </label>
-              <em v-if="!insertIncluded[index]">
-                {{ isGeneratedColumn(column.extra) ? "数据库自动生成" : column.column_default ? "使用默认值" : "不写入此字段" }}
-              </em>
+              <input v-model="insertValues[index]" :aria-label="`${column.name} 的值`" :disabled="!insertIncluded[index] || insertNulls[index]" :placeholder="column.column_default ? `默认值：${column.column_default}` : `输入 ${column.name}`" />
+              <div class="new-row-field-options">
+                <label v-if="column.is_nullable">
+                  <input v-model="insertNulls[index]" type="checkbox" :disabled="!insertIncluded[index]" />
+                  <span>NULL</span>
+                </label>
+                <em v-if="!insertIncluded[index]">
+                  {{ isGeneratedColumn(column.extra) ? "数据库自动生成" : column.column_default ? "使用默认值" : "不写入此字段" }}
+                </em>
+              </div>
             </div>
           </div>
-          <input v-if="response.isProduction" v-model="rowMutationConfirmation" class="production-confirmation" :placeholder="`生产连接：输入 ${response.connectionName} 确认`" :aria-label="`输入连接名 ${response.connectionName} 确认新增`" />
-        </div>
-        <footer class="mutation-actions">
-          <button type="button" @click="insertOpen = false">取消</button>
-          <button class="stage-edit" :disabled="inserting || !mutationConfirmationValid()" type="button" @click="insertRow">
-            {{ inserting ? "新增中…" : "确认新增" }}
-          </button>
-        </footer>
-      </section>
-    </div>
+          <footer class="mutation-actions">
+            <button type="button" @click="insertOpen = false">取消</button>
+            <button class="stage-edit" :disabled="inserting" type="button" @click="insertRow">
+              {{ inserting ? "新增中…" : "确认新增" }}
+            </button>
+          </footer>
+        </section>
+      </div>
 
-    <div v-if="deleteCandidate && response" class="cell-sheet-backdrop" @click.self="deleteCandidate = null">
-      <section class="cell-sheet delete-sheet" role="alertdialog" aria-modal="true" aria-label="删除数据">
-        <header>
-          <div>
-            <span>DELETE ROW</span>
-            <strong>删除数据</strong>
+      <div v-if="deleteCandidate && response" class="cell-sheet-backdrop" @click.self="deleteCandidate = null">
+        <section class="cell-sheet delete-sheet" role="alertdialog" aria-modal="true" aria-label="删除数据">
+          <header>
+            <div>
+              <span>DELETE ROW</span>
+              <strong>删除数据</strong>
+            </div>
+            <button type="button" aria-label="关闭删除确认" @click="deleteCandidate = null">×</button>
+          </header>
+          <div class="delete-confirmation">
+            <strong>确认永久删除这一行？</strong>
+            <code>{{ primaryKeySummary(deleteCandidate.row) }}</code>
+            <p>系统会使用主键精确定位。删除操作无法撤销。</p>
+            <p v-if="actionError" class="mutation-error" role="alert">{{ actionError }}</p>
           </div>
-          <button type="button" aria-label="关闭删除确认" @click="deleteCandidate = null">×</button>
-        </header>
-        <div class="delete-confirmation">
-          <strong>确认永久删除这一行？</strong>
-          <code>{{ primaryKeySummary(deleteCandidate.row) }}</code>
-          <p>系统会使用主键精确定位。删除操作无法撤销。</p>
-          <p v-if="actionError" class="mutation-error" role="alert">{{ actionError }}</p>
-          <input v-if="response.isProduction" v-model="rowMutationConfirmation" class="production-confirmation" :placeholder="`生产连接：输入 ${response.connectionName} 确认`" :aria-label="`输入连接名 ${response.connectionName} 确认删除`" />
-        </div>
-        <footer class="mutation-actions">
-          <button type="button" @click="deleteCandidate = null">取消</button>
-          <button class="danger-action" :disabled="deleting || !mutationConfirmationValid()" type="button" @click="deleteRow">
-            {{ deleting ? "删除中…" : "确认删除" }}
-          </button>
-        </footer>
-      </section>
-    </div>
+          <footer class="mutation-actions">
+            <button type="button" @click="deleteCandidate = null">取消</button>
+            <button class="danger-action" :disabled="deleting" type="button" @click="deleteRow">
+              {{ deleting ? "删除中…" : "确认删除" }}
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
   </section>
 </template>
 
 <style scoped>
 .table-data {
   display: grid;
-  gap: 10px;
+  gap: 7px;
 }
 .data-toolbar {
   display: grid;
-  min-height: 68px;
+  min-height: 58px;
   grid-template-columns: 42px minmax(0, 1fr) auto;
   align-items: stretch;
-  border: 1px solid var(--line);
-  border-top: 2px solid var(--acid);
-  background: var(--panel);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .data-toolbar button {
   border: 0;
@@ -700,30 +746,25 @@ onMounted(() => loadPage(0));
   font: inherit;
 }
 .data-toolbar .back {
-  border-right: 1px solid var(--line);
-  font-size: 16px;
+  border-right: 0;
+  font-size: 18px;
 }
 .data-toolbar .sql-action {
-  border-left: 1px solid var(--line);
+  border-left: 0;
   padding: 0 12px;
-  font-size: 10px;
+  font-size: 20px;
   font-weight: 760;
   letter-spacing: 0.1em;
 }
 .data-toolbar > div {
   min-width: 0;
-  padding: 10px 12px;
-}
-.data-toolbar span {
-  color: var(--acid);
-  font-size: 9px;
-  letter-spacing: 0.14em;
+  padding: 8px 12px;
 }
 .data-toolbar strong {
   display: block;
   overflow: hidden;
-  margin-top: 5px;
-  font-size: 14px;
+  margin-top: 3px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -731,16 +772,120 @@ onMounted(() => loadPage(0));
   overflow: hidden;
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.data-toolbar p em,
+.data-toolbar p span {
+  display: inline-block;
+  margin-left: 6px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line));
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: var(--danger);
+  font-size: 7px;
+  font-style: normal;
+}
+.data-toolbar p span {
+  border-color: color-mix(in srgb, var(--acid) 45%, var(--line));
+  color: var(--acid);
 }
 .data-controls {
   display: grid;
   gap: 7px;
+  background: transparent;
+}
+.data-control-bar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+.data-control-bar button {
+  display: flex;
+  min-width: 0;
+  min-height: 35px;
+  align-items: center;
+  gap: 7px;
   border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 0 11px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 10px;
+}
+.data-control-bar button.active {
+  border-color: color-mix(in srgb, var(--acid) 45%, var(--line));
+  color: var(--acid);
+}
+.data-control-bar svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.data-control-bar b {
+  margin-left: auto;
+  color: var(--faint);
+  font-weight: 500;
+}
+.compact-control-panel {
+  display: flex;
+  overflow-x: auto;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   background: var(--panel);
   padding: 8px;
+  scrollbar-width: none;
+}
+.compact-control-panel > button {
+  flex: none;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--field);
+  padding: 0 10px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 9px;
+}
+.compact-control-panel > button.active {
+  border-color: var(--acid);
+  color: var(--acid);
+}
+.compact-control-panel > button span {
+  margin-left: 5px;
+}
+.column-options {
+  display: grid;
+  overflow: visible;
+}
+.column-options > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px 34px;
+  align-items: center;
+}
+.column-options > div > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.column-options > div > button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  color: var(--ink);
+}
+.column-options .auto-width {
+  width: 100%;
 }
 .filter-builder {
   display: grid;
@@ -752,16 +897,17 @@ onMounted(() => loadPage(0));
 footer select {
   min-width: 0;
   border: 1px solid var(--line);
-  border-radius: 0;
-  background: #0b0d0c;
+  border-radius: 6px;
+  background: var(--field);
   padding: 8px;
-  color: var(--text);
+  color: var(--ink);
   font: inherit;
   font-size: 10px;
 }
 .filter-builder button {
   border: 1px solid var(--acid);
-  background: transparent;
+  border-radius: 6px;
+  background: var(--accent-soft);
   padding: 0 10px;
   color: var(--acid);
   font: inherit;
@@ -826,18 +972,21 @@ footer select {
   color: var(--acid);
 }
 .data-meta {
-  display: flex;
+  display: none;
   gap: 14px;
   border: 1px solid var(--line);
+  border-radius: 7px;
   padding: 9px 11px;
   color: var(--acid);
   font-size: 9px;
   letter-spacing: 0.1em;
 }
 .result-tools {
-  display: grid;
+  display: none;
   grid-template-columns: 1fr auto 1fr;
+  overflow: hidden;
   border: 1px solid var(--line);
+  border-radius: 7px;
   background: var(--panel);
 }
 .result-tools button,
@@ -859,7 +1008,7 @@ footer select {
   color: var(--muted);
 }
 .result-tools .export-action {
-  background: linear-gradient(135deg, rgba(199, 255, 61, 0.16), rgba(199, 255, 61, 0.04));
+  background: var(--accent-soft);
   font-weight: 720;
 }
 .interaction-status,
@@ -873,7 +1022,7 @@ footer select {
   overflow-wrap: anywhere;
 }
 .data-hint {
-  color: var(--faint);
+  display: none;
 }
 .action-error,
 .mutation-error {
@@ -892,10 +1041,11 @@ footer select {
   grid-column: 1 / -1;
 }
 .data-scroll {
-  max-height: 54vh;
+  max-height: 57vh;
   overflow: auto;
   border: 1px solid var(--line);
-  background: #0b0d0c;
+  border-radius: 0;
+  background: var(--panel);
 }
 table {
   table-layout: fixed;
@@ -903,7 +1053,7 @@ table {
   width: max-content;
   border-collapse: collapse;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 9px;
 }
 th,
 td {
@@ -918,12 +1068,12 @@ th {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #171b18;
-  color: var(--acid);
+  background: var(--field);
+  color: var(--ink);
 }
 .column-heading {
   display: flex;
-  min-height: 40px;
+  min-height: 34px;
   align-items: stretch;
   justify-content: space-between;
 }
@@ -932,8 +1082,8 @@ th {
   flex: 1;
   border: 0;
   background: transparent;
-  padding: 11px 10px;
-  color: var(--acid);
+  padding: 8px 8px;
+  color: var(--ink);
   font: inherit;
   font-weight: 700;
   text-align: left;
@@ -948,7 +1098,7 @@ th {
   color: var(--amber);
 }
 .width-controls {
-  display: flex;
+  display: none;
 }
 .width-controls button {
   width: 27px;
@@ -960,13 +1110,14 @@ th {
 }
 td {
   max-width: 480px;
-  padding: 12px 10px;
+  height: 34px;
+  padding: 7px 8px;
   cursor: pointer;
 }
 td:active,
 td:focus {
   outline: 0;
-  background: rgba(199, 255, 61, 0.1);
+  background: var(--accent-soft);
   color: var(--acid);
 }
 td.null {
@@ -974,7 +1125,7 @@ td.null {
   font-style: italic;
 }
 td.primary {
-  background: #f8fafc;
+  background: var(--field);
 }
 td.edited {
   position: relative;
@@ -1000,6 +1151,26 @@ footer {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   border: 1px solid var(--line);
+}
+.table-data > footer {
+  min-height: 43px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  border-radius: 5px;
+}
+.page-buttons {
+  display: flex;
+  gap: 5px;
+  padding: 4px 6px;
+}
+.page-buttons.next {
+  justify-content: flex-end;
+}
+.page-buttons button {
+  width: 31px;
+  min-height: 31px;
+  border: 1px solid var(--line) !important;
+  border-radius: 5px;
+  color: var(--ink);
 }
 footer button {
   min-height: 40px;
@@ -1033,6 +1204,7 @@ button:disabled {
   opacity: 0.4;
 }
 .ordering-note {
+  display: none;
   margin: 0;
   color: var(--faint);
   font-family: "PingFang SC", sans-serif;
@@ -1041,23 +1213,31 @@ button:disabled {
 }
 .cell-sheet-backdrop {
   position: fixed;
-  z-index: 30;
+  z-index: 50;
   inset: 0;
   display: grid;
   align-items: end;
+  overflow: hidden;
+  padding-top: var(--safe-top);
   background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(4px);
 }
 .cell-sheet {
-  max-height: min(72vh, 560px);
+  display: flex;
+  width: min(720px, 100%);
+  max-height: min(72dvh, 560px);
+  min-height: 0;
+  flex-direction: column;
   overflow: hidden;
-  border: 1px solid rgba(199, 255, 61, 0.45);
+  margin: 0 auto;
+  border: 1px solid color-mix(in srgb, var(--acid) 45%, var(--line));
   border-bottom: 0;
-  background: #0b0e0c;
+  background: var(--panel-raised);
   box-shadow: 0 -24px 70px rgba(0, 0, 0, 0.68);
 }
 .cell-sheet > header {
   display: flex;
+  flex: 0 0 auto;
   min-height: 58px;
   align-items: stretch;
   justify-content: space-between;
@@ -1091,8 +1271,9 @@ button:disabled {
   font-size: 24px;
 }
 .cell-sheet pre {
+  flex: 1 1 auto;
   overflow: auto;
-  max-height: calc(min(72vh, 560px) - 116px);
+  max-height: none;
   min-height: 120px;
   margin: 0;
   padding: 16px;
@@ -1105,9 +1286,12 @@ button:disabled {
 }
 .cell-sheet > footer {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: 1fr 1fr;
   border: 0;
   border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding-bottom: var(--safe-bottom);
 }
 .cell-sheet > footer button {
   min-height: 48px;
@@ -1119,19 +1303,25 @@ button:disabled {
   font-size: 10px;
 }
 .edit-toolbar {
+  position: sticky;
+  z-index: 8;
+  bottom: var(--safe-bottom);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: 1fr 1.05fr;
+  gap: 8px;
   align-items: stretch;
-  border: 1px solid var(--line);
-  background: #ffffff;
+  border: 0;
+  border-radius: 0;
+  background: var(--panel);
+  padding: 8px 0;
+  box-shadow: 0 -10px 24px color-mix(in srgb, var(--panel) 88%, transparent);
 }
 .edit-toolbar.active {
   border-color: #fdba74;
   box-shadow: inset 3px 0 0 #f97316;
 }
 .edit-toolbar > div {
-  min-width: 0;
-  padding: 10px 12px;
+  display: none;
 }
 .edit-toolbar strong,
 .edit-toolbar small {
@@ -1150,44 +1340,53 @@ button:disabled {
   border: 0;
   border-left: 1px solid var(--line);
   outline: 0;
-  background: #fff7ed;
+  background: color-mix(in srgb, var(--amber) 10%, var(--panel));
   padding: 0 10px;
   color: var(--ink);
   font: inherit;
   font-size: 10px;
 }
 .edit-toolbar button {
-  min-width: 62px;
-  border: 0;
-  border-left: 1px solid var(--line);
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid var(--acid);
+  border-radius: 5px;
   background: transparent;
-  color: var(--muted);
+  color: var(--acid);
   font: inherit;
   font-size: 10px;
 }
 .edit-toolbar .insert-row {
-  min-width: 74px;
+  min-width: 0;
   color: var(--acid);
   font-weight: 720;
 }
 .edit-toolbar .save-edits {
-  min-width: 88px;
+  min-width: 0;
+  border-color: var(--acid);
   background: var(--acid);
   color: #ffffff;
   font-weight: 720;
+}
+.edit-toolbar .discard-edits {
+  display: none;
 }
 .edit-blocked {
   margin: 0;
   border: 1px solid #fed7aa;
   border-left: 3px solid var(--amber);
-  background: #fff7ed;
+  background: color-mix(in srgb, var(--amber) 9%, var(--panel));
   padding: 9px 11px;
-  color: #9a3412;
+  color: var(--amber);
   font-size: 10px;
 }
 .cell-editor {
   display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
   gap: 9px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 14px;
 }
 .cell-editor textarea {
@@ -1231,7 +1430,14 @@ button:disabled {
   padding: 10px 14px;
 }
 .cell-sheet > footer.editable {
-  grid-template-columns: 1fr 1fr 1.2fr;
+  grid-template-columns: 0.8fr 1fr 1fr 1.2fr;
+}
+.cell-sheet > footer.has-delete:not(.editable) {
+  grid-template-columns: 0.8fr 1fr 1fr;
+}
+.cell-sheet > footer .delete-cell-row {
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+  color: var(--danger);
 }
 .cell-sheet > footer .stage-edit {
   background: var(--acid);
@@ -1244,7 +1450,7 @@ button:disabled {
 .row-action-heading {
   z-index: 2;
   width: 56px;
-  background: #eff6ff;
+  background: var(--accent-soft);
 }
 .row-action-heading > button {
   width: 100%;
@@ -1259,7 +1465,7 @@ button:disabled {
 .row-action-cell {
   width: 56px;
   padding: 0;
-  background: #ffffff;
+  background: var(--panel);
 }
 .delete-row {
   width: 100%;
@@ -1271,21 +1477,23 @@ button:disabled {
   font-size: 9px;
 }
 .row-mutation-sheet {
-  max-height: min(84vh, 720px);
+  max-height: min(84dvh, 720px);
 }
 .new-row-form {
   display: grid;
-  max-height: calc(min(84vh, 720px) - 116px);
+  min-height: 0;
+  flex: 1 1 auto;
+  max-height: none;
   gap: 8px;
   overflow-y: auto;
   padding: 12px;
-  background: #f8fafc;
+  background: var(--field);
 }
 .new-row-field {
   display: grid;
   gap: 8px;
   border: 1px solid var(--line);
-  background: #ffffff;
+  background: var(--panel);
   padding: 10px;
 }
 .new-row-field-heading {
@@ -1355,17 +1563,6 @@ button:disabled {
   font-size: 8px;
   font-style: normal;
 }
-.production-confirmation {
-  min-height: 42px;
-  border: 1px solid #fdba74;
-  border-radius: 0;
-  outline: 0;
-  background: #fff7ed;
-  padding: 0 10px;
-  color: var(--ink);
-  font: inherit;
-  font-size: 10px;
-}
 .delete-confirmation {
   display: grid;
   gap: 12px;
@@ -1414,14 +1611,16 @@ button:disabled {
     grid-row: 1 / 3;
   }
   .edit-toolbar {
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .edit-toolbar input {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    min-height: 42px;
-    border-top: 1px solid var(--line);
-    border-left: 0;
+}
+@media (max-height: 600px) {
+  .cell-sheet,
+  .row-mutation-sheet {
+    max-height: calc(100dvh - var(--safe-top));
+  }
+  .cell-editor textarea {
+    min-height: 96px;
   }
 }
 @keyframes spin {

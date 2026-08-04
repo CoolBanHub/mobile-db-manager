@@ -59,6 +59,7 @@ const currentFolder = computed(() =>
 );
 const folderTrail = computed(() => {
   const result: SavedSqlFolder[] = [];
+  // seen 防止损坏的本地目录关系形成环，导致面包屑计算无限循环。
   const seen = new Set<string>();
   let folder = currentFolder.value;
   while (folder && !seen.has(folder.id)) {
@@ -104,6 +105,7 @@ const unavailableMoveFolderIds = computed(() => {
   const unavailable = new Set<string>();
   if (manageAction.value !== "move-folder" || !manageFolder.value) return unavailable;
   const queue = [manageFolder.value.id];
+  // 当前目录及全部后代都不能成为移动目标，否则会制造目录环。
   while (queue.length) {
     const id = queue.shift()!;
     if (unavailable.has(id)) continue;
@@ -172,6 +174,7 @@ async function refreshHistory(options: { silent?: boolean; preserveDepth?: boole
     return;
   }
   const version = ++requestVersion;
+  // 筛选条件快速变化时只接受最后一次请求；静默刷新可保持当前已加载深度。
   if (!options.silent) loading.value = true;
   error.value = "";
   try {
@@ -501,6 +504,24 @@ function formatTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
+
+function handleBack() {
+  if (manageAction.value) {
+    closeManage();
+    return true;
+  }
+  if (detail.value) {
+    detail.value = null;
+    return true;
+  }
+  if (currentFolderId.value) {
+    currentFolderId.value = currentFolder.value?.parentFolderId ?? null;
+    return true;
+  }
+  return false;
+}
+
+defineExpose({ handleBack });
 
 onMounted(() => {
   void load();
