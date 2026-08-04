@@ -1,0 +1,110 @@
+name: Android Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the GitHub Release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build APK and upload release asset
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF_NAME}"
+            prerelease="false"
+          else
+            tag="${{ inputs.tag }}"
+            prerelease="${{ inputs.prerelease }}"
+          fi
+
+          safe_tag="${tag//\//-}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          echo "asset_name=mobile-db-manager-${safe_tag}.apk" >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: pnpm
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run web unit tests
+        run: pnpm test
+
+      - name: Build debug APK
+        run: pnpm android:build:debug
+
+      - name: Prepare release asset
+        shell: bash
+        run: |
+          mkdir -p release
+          cp android/app/build/outputs/apk/debug/app-debug.apk "release/${{ steps.release.outputs.asset_name }}"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          ASSET_NAME: ${{ steps.release.outputs.asset_name }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        shell: bash
+        run: |
+          notes="Automated Android APK build for ${RELEASE_TAG}."
+          asset="release/${ASSET_NAME}"
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${asset}" --clobber
+          else
+            args=(release create "${RELEASE_TAG}" "${asset}" --title "${RELEASE_TAG}" --notes "${notes}" --target "${GITHUB_SHA}")
+            if [[ "${PRERELEASE}" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
+          fi
