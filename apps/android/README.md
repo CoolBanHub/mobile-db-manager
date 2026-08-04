@@ -8,7 +8,7 @@ DBX 安卓端是一款可独立运行的移动数据库客户端。应用内置�
 - 创建、编辑、测试和删除本机数据库连接。
 - 使用 Android Keystore AES-GCM 加密保存数据库密码、连接串、代理密码、
   SSH 密码和私钥。
-- 支持连接搜索、分组、收藏以及开发、预发、生产环境标记。
+- 支持连接搜索、分组、收藏、自定义标签以及开发、预发、生产环境标记。
 - 支持数据库、Schema、表、视图、字段、索引、外键和存储过程浏览。
 - 支持只读查询、高级写入、生产连接二次确认、查询超时和查询取消。
 - 支持结果分页、表数据筛选与排序、单元格修改、新增行和删除行。
@@ -25,11 +25,12 @@ DBX 安卓端是一款可独立运行的移动数据库客户端。应用内置�
 | PostgreSQL | 支持 | 支持 | 支持 |
 | MySQL / MariaDB | 支持 | 支持 | 支持 |
 | SQL Server | 支持 | 支持 | 支持 |
-| MongoDB | 支持主机端口或 URI | 支持 `ping` | 暂未提供文档浏览器 |
-| Redis | 支持 Standalone | 支持 AUTH、SELECT、PING | 暂未提供 Key 浏览器 |
+| MongoDB | 支持主机端口或 URI | 支持 `ping` | 支持集合与文档浏览、编辑 |
+| Redis | 支持 Standalone | 支持 AUTH、SELECT、PING | 支持 Key 浏览、编辑与 TTL |
+| etcd | 支持 v3 JSON Gateway | 支持状态与 Auth | 支持前缀查询、键值编辑 |
 
 MongoDB URI 已包含完整路由信息，不能同时启用应用内 SSH 或 HTTP 隧道。Redis
-当前只支持 Standalone，不支持 Sentinel 和 Cluster。
+当前只支持 Standalone，不支持 Sentinel 和 Cluster。etcd 需要启用 v3 JSON Gateway。
 
 ## 本机数据与安全
 
@@ -131,8 +132,9 @@ Android 不包含完整 Java SE 的 `java.lang.management` 和 JMX。构建脚�
 
 - PostgreSQL：替换结果缓冲区内存检测。
 - MySQL / MariaDB：移除连接池 JMX 注册。
-- SQL Server：替换结果缓冲区内存检测。
-- MongoDB：移除 JMX 监听和注册。
+- MongoDB：移除 JMX 注册，并补充 Android 缺失的 SASL 类型契约。
+
+SQL Server 使用 Android ART 兼容的 jTDS 驱动，不再打包 Microsoft 桌面 JDBC 驱动。
 
 兼容实现使用 `Runtime.getRuntime().maxMemory()` 或无操作监控实现，不改变
 DBX 安卓端使用的普通连接、查询和连接池行为。不要在 `implementation` 中

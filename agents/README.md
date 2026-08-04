@@ -9,7 +9,7 @@ Each agent runs as a standalone process and communicates with DBX via stdin/stdo
 ## Supported Databases
 
 | Agent | Database | Driver |
-|-------|----------|-------------|
+| --- | --- | --- |
 | access | Microsoft Access | UCanAccess |
 | dameng | 达梦 DM8 | DM JDBC |
 | kingbase | 人大金仓 KingbaseES | gokb Go native agent |
@@ -45,7 +45,6 @@ Each agent runs as a standalone process and communicates with DBX via stdin/stdo
 | etcd | etcd | jetcd |
 | zookeeper | Apache ZooKeeper | Apache Curator |
 | rabbitmq | RabbitMQ | RabbitMQ AMQP Java client |
-
 
 ## Multi-JRE Support
 
@@ -102,7 +101,7 @@ Agent module versions are tracked in [`versions.json`](versions.json).
 
 ## Architecture
 
-```
+```text
 DBX Main Process (Rust/Tauri)
     │ stdin/stdout (JSON-RPC 2.0)
     ▼
