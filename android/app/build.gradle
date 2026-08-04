@@ -1,0 +1,169 @@
+apply plugin: 'com.android.application'
+
+def releaseKeystorePath = System.getenv("DBX_ANDROID_KEYSTORE")
+def releaseStorePassword = System.getenv("DBX_ANDROID_STORE_PASSWORD")
+def releaseKeyAlias = System.getenv("DBX_ANDROID_KEY_ALIAS")
+def releaseKeyPassword = System.getenv("DBX_ANDROID_KEY_PASSWORD")
+def releaseSigningConfigured = [releaseKeystorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it }
+def androidVersionCode = (System.getenv("DBX_ANDROID_VERSION_CODE") ?: "1").toInteger()
+
+configurations {
+    androidMariaDbDriver {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+    androidPostgresDriver {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+    androidMongoDriverCore {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
+def androidMariaDbDriverJar = tasks.register('androidMariaDbDriverJar', Zip) {
+    from {
+        configurations.androidMariaDbDriver.collect { zipTree(it) }
+    }
+    exclude 'org/mariadb/jdbc/pool/Pool.class'
+    exclude 'org/mariadb/jdbc/pool/Pool$*.class'
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    archiveFileName = 'mariadb-java-client-3.5.6-android.jar'
+    destinationDirectory = layout.buildDirectory.dir('generated/android-compatible-drivers')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def androidPostgresDriverJar = tasks.register('androidPostgresDriverJar', Zip) {
+    from {
+        configurations.androidPostgresDriver.collect { zipTree(it) }
+    }
+    exclude 'org/postgresql/util/PGPropertyMaxResultBufferParser.class'
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    archiveFileName = 'postgresql-42.7.7-android.jar'
+    destinationDirectory = layout.buildDirectory.dir('generated/android-compatible-drivers')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def androidMongoDriverCoreJar = tasks.register('androidMongoDriverCoreJar', Zip) {
+    from {
+        configurations.androidMongoDriverCore.collect { zipTree(it) }
+    }
+    exclude 'com/mongodb/management/JMXMBeanServer.class'
+    exclude 'META-INF/native-image/**'
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    archiveFileName = 'mongodb-driver-core-5.5.1-android.jar'
+    destinationDirectory = layout.buildDirectory.dir('generated/android-compatible-drivers')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def androidMariaDbDriverFiles = files(androidMariaDbDriverJar.flatMap { it.archiveFile })
+androidMariaDbDriverFiles.builtBy(androidMariaDbDriverJar)
+
+def androidPostgresDriverFiles = files(androidPostgresDriverJar.flatMap { it.archiveFile })
+androidPostgresDriverFiles.builtBy(androidPostgresDriverJar)
+
+def androidMongoDriverCoreFiles = files(androidMongoDriverCoreJar.flatMap { it.archiveFile })
+androidMongoDriverCoreFiles.builtBy(androidMongoDriverCoreJar)
+
+// AGP does not create these directories when generated file dependencies
+// require no desugaring output, but the following DEX merge task validates them.
+['debug', 'release'].each { variant ->
+    def taskName = "desugar${variant.capitalize()}FileDependencies"
+    layout.buildDirectory
+            .dir("intermediates/external_file_lib_dex_archives/${variant}/${taskName}")
+            .get()
+            .asFile
+            .mkdirs()
+}
+
+android {
+    namespace = "com.houtsider.dbx"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.houtsider.dbx"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode androidVersionCode
+        versionName System.getenv("DBX_ANDROID_VERSION_NAME") ?: "0.1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            release {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    // Mobile DB Manager direct-connect drivers. Credentials and JDBC connections stay
+    // inside the native process; the WebView only addresses connections by id.
+    androidPostgresDriver "org.postgresql:postgresql:42.7.7"
+    implementation androidPostgresDriverFiles
+    // MariaDB Connector/J supports both MariaDB and MySQL and maintains
+    // Android compatibility. Oracle Connector/J references java.sql.SQLType,
+    // which is absent from Android's java.sql subset and crashes at runtime.
+    // 3.5.8 eagerly compiles a regex that Android's ICU rejects during TLS startup.
+    // 3.5.6 keeps that validation lazy, so normal MySQL connections work on Android.
+    androidMariaDbDriver "org.mariadb.jdbc:mariadb-java-client:3.5.6"
+    implementation androidMariaDbDriverFiles
+    // Microsoft 桌面 JDBC 驱动在 ART 上会卡住 TLS/TDS 握手；jTDS 使用 Android
+    // 可用的套接字实现，并由连接 SQL Server 2022 的设备测试覆盖。
+    implementation "net.sourceforge.jtds:jtds:1.3.1"
+    // MongoDB 8.1+ 的 buildInfo 需要认证，旧 3.x 驱动会在认证前调用该命令，
+    // 因而无法连接开启认证的 MongoDB 8.1/8.2。
+    androidMongoDriverCore "org.mongodb:mongodb-driver-core:5.5.1"
+    implementation("org.mongodb:mongodb-driver-sync:5.5.1") {
+        exclude group: "org.mongodb", module: "mongodb-driver-core"
+    }
+    implementation androidMongoDriverCoreFiles
+    implementation "com.github.mwiede:jsch:2.28.2"
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test:runner:1.7.0"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

@@ -1,0 +1,38 @@
+{
+  "name": "mobile-db-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.27.0",
+  "scripts": {
+    "build": "vue-tsc --noEmit && vite build",
+    "test": "vitest run",
+    "sync": "pnpm build && cap sync android",
+    "open": "cap open android",
+    "android:build:debug": "pnpm sync && cd android && ./gradlew assembleDebug",
+    "android:build:bundle": "pnpm sync && cd android && ./gradlew bundleRelease",
+    "android:device:test": "pnpm sync && cd android && ./gradlew :app:connectedDebugAndroidTest",
+    "android:device:test:build": "pnpm sync && cd android && ./gradlew :app:assembleDebugAndroidTest",
+    "android:release": "node scripts/build-release.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.4.2",
+    "@capacitor/app": "8.0.0",
+    "@capacitor/core": "8.4.2",
+    "@capacitor/filesystem": "8.1.2",
+    "@capacitor/share": "8.0.1",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.3",
+    "@fontsource-variable/azeret-mono": "5.3.0",
+    "fflate": "0.8.2",
+    "vue": "^3.5.35"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.4.2",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^3.3.3"
+  }
+}
