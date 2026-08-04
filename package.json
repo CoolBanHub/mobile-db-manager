@@ -10,6 +10,7 @@
     "sync": "pnpm build && cap sync android",
     "open": "cap open android",
     "android:build:debug": "pnpm sync && cd android && ./gradlew assembleDebug",
+    "android:build:release-apk": "pnpm sync && cd android && ./gradlew assembleRelease",
     "android:build:bundle": "pnpm sync && cd android && ./gradlew bundleRelease",
     "android:device:test": "pnpm sync && cd android && ./gradlew :app:connectedDebugAndroidTest",
     "android:device:test:build": "pnpm sync && cd android && ./gradlew :app:assembleDebugAndroidTest",

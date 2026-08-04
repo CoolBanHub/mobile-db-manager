@@ -171,8 +171,8 @@ file, and low-level connection client. Do not put new database logic back into
 
 ## GitHub Release
 
-Push a `release/v*` tag to trigger GitHub Actions. The workflow builds a Debug APK
-and uploads it to the matching GitHub Release.
+Push a `release/v*` tag to trigger GitHub Actions. The workflow builds a signed
+Release APK and uploads it to the matching GitHub Release.
 
 ```bash
 git tag release/v0.1.0
@@ -183,11 +183,26 @@ You can also run the `Android Release APK` workflow manually from GitHub Actions
 and provide a tag such as `release/v0.1.0`.
 
 The workflow derives Android `versionName` and monotonic `versionCode` values
-from `release/vMAJOR.MINOR.PATCH`. In-app update checks use the same rule.
+from `release/vMAJOR.MINOR.PATCH`. In-app update checks use the same rule. Android
+can only install an APK update over an existing app when every release uses the
+same signing certificate.
 
 ## Release Signing
 
-Set these environment variables before creating a signed release build:
+GitHub Actions APK releases require these repository secrets:
+
+- `MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64`
+- `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
+- `MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS`
+- `MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD`
+
+`MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64` is the base64-encoded keystore file:
+
+```bash
+base64 < android/signing/mobile-db-manager-release.jks | tr -d '\n'
+```
+
+Set these environment variables before creating a local signed release build:
 
 - `MOBILE_DB_MANAGER_ANDROID_KEYSTORE`
 - `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
@@ -196,7 +211,19 @@ Set these environment variables before creating a signed release build:
 - `MOBILE_DB_MANAGER_ANDROID_VERSION_CODE`
 - `MOBILE_DB_MANAGER_ANDROID_VERSION_NAME`
 
-Then run:
+Build a signed APK:
+
+```bash
+pnpm android:build:release-apk
+```
+
+APK output:
+
+```text
+android/app/build/outputs/apk/release/app-release.apk
+```
+
+Build a signed AAB:
 
 ```bash
 pnpm android:release

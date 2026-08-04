@@ -151,8 +151,8 @@ Android 原生直连代码在
 
 ## GitHub Release
 
-推送 `release/v*` 标签会触发 GitHub Actions 构建 Debug APK，并上传到对应的
-GitHub Release。
+推送 `release/v*` 标签会触发 GitHub Actions 构建已签名 Release APK，并上传到
+对应的 GitHub Release。
 
 ```bash
 git tag release/v0.1.0
@@ -163,11 +163,25 @@ git push origin release/v0.1.0
 类似 `release/v0.1.0` 的标签。
 
 workflow 会从 `release/vMAJOR.MINOR.PATCH` 自动设置 Android `versionName`
-和递增 `versionCode`，应用内更新检查也使用同一套规则。
+和递增 `versionCode`，应用内更新检查也使用同一套规则。为了让 Android 能覆盖安装
+更新包，每次 Release 必须使用同一个签名证书。
 
 ## 发布签名
 
-发布前设置以下环境变量：
+GitHub Actions 发布 APK 需要配置以下仓库 Secrets：
+
+- `MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64`
+- `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
+- `MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS`
+- `MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD`
+
+`MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64` 是 keystore 文件的 base64 内容：
+
+```bash
+base64 < android/signing/mobile-db-manager-release.jks | tr -d '\n'
+```
+
+本地构建签名包时设置以下环境变量：
 
 - `MOBILE_DB_MANAGER_ANDROID_KEYSTORE`
 - `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
@@ -176,7 +190,19 @@ workflow 会从 `release/vMAJOR.MINOR.PATCH` 自动设置 Android `versionName`
 - `MOBILE_DB_MANAGER_ANDROID_VERSION_CODE`
 - `MOBILE_DB_MANAGER_ANDROID_VERSION_NAME`
 
-然后执行：
+构建签名 APK：
+
+```bash
+pnpm android:build:release-apk
+```
+
+APK 输出位置：
+
+```text
+android/app/build/outputs/apk/release/app-release.apk
+```
+
+构建签名 AAB：
 
 ```bash
 pnpm android:release

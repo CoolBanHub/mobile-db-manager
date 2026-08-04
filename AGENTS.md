@@ -70,9 +70,10 @@ Android 原生直连代码放在 `android/app/src/main/java/com/coolbanhub/mobil
 - GitHub Actions workflow 位于 `.github/workflows/android-release.yml`。
 - 发布标签使用 `release/v*`，例如 `release/v0.0.1`。
 - 不要移动已经发布过的 tag；如需基于新提交重新打包，创建新的 release tag。
-- tag 发布会构建 Debug APK 并上传到对应 GitHub Release。
+- tag 发布会构建已签名 Release APK 并上传到对应 GitHub Release。
 - release workflow 必须从 `release/vMAJOR.MINOR.PATCH` 设置 Android `versionName` 和单调递增 `versionCode`，应用内更新依赖这个规则。
-- 签名发布只通过环境变量提供 keystore 和密码，不提交密钥文件。
+- Release APK 必须使用同一个签名证书，否则 Android 无法覆盖安装更新。
+- 签名发布只通过环境变量或 GitHub Secrets 提供 keystore 和密码，不提交密钥文件。
 
 ## 验证命令
 

@@ -98,17 +98,55 @@ jobs:
       - name: Run web unit tests
         run: pnpm test
 
-      - name: Build debug APK
+      - name: Decode Android signing key
+        env:
+          MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64: ${{ secrets.MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64 }}
+          MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD: ${{ secrets.MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD }}
+          MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS: ${{ secrets.MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS }}
+          MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD: ${{ secrets.MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          missing=0
+          for name in \
+            MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64 \
+            MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD \
+            MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS \
+            MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing GitHub Actions secret: ${name}"
+              missing=1
+            fi
+          done
+          if [[ "${missing}" != "0" ]]; then
+            exit 1
+          fi
+
+          signing_dir="${RUNNER_TEMP}/mobile-db-manager-signing"
+          mkdir -p "${signing_dir}"
+          keystore_path="${signing_dir}/release.jks"
+          printf "%s" "${MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore_path}"
+
+          echo "MOBILE_DB_MANAGER_ANDROID_KEYSTORE=${keystore_path}" >> "${GITHUB_ENV}"
+          echo "MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD=${MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD}" >> "${GITHUB_ENV}"
+          echo "MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS=${MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS}" >> "${GITHUB_ENV}"
+          echo "MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD=${MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD}" >> "${GITHUB_ENV}"
+
+      - name: Build signed release APK
         env:
           MOBILE_DB_MANAGER_ANDROID_VERSION_NAME: ${{ steps.release.outputs.version_name }}
           MOBILE_DB_MANAGER_ANDROID_VERSION_CODE: ${{ steps.release.outputs.version_code }}
-        run: pnpm android:build:debug
+        run: pnpm android:build:release-apk
 
       - name: Prepare release asset
         shell: bash
         run: |
           mkdir -p release
-          cp android/app/build/outputs/apk/debug/app-debug.apk "release/${{ steps.release.outputs.asset_name }}"
+          cp android/app/build/outputs/apk/release/app-release.apk "release/${{ steps.release.outputs.asset_name }}"
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          apksigner verify --verbose --print-certs "release/${{ steps.release.outputs.asset_name }}"
 
       - name: Create or update GitHub Release
         env:
