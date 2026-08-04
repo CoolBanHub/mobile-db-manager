@@ -7,7 +7,7 @@ export interface ConnectionPreference {
   tags: string[];
 }
 
-const STORAGE_KEY = "dbx-mobile.connection-preferences.v1";
+const STORAGE_KEY = "mobile-db-manager.connection-preferences.v1";
 
 type PreferenceMap = Record<string, ConnectionPreference>;
 

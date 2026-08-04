@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
-  appId: "com.houtsider.dbx",
+  appId: "com.coolbanhub.mobiledbmanager",
   appName: "Mobile DB Manager",
   webDir: "dist",
   android: {

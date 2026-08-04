@@ -1,4 +1,4 @@
-package com.houtsider.dbx;
+package com.coolbanhub.mobiledbmanager;
 
 import android.util.Base64;
 
@@ -80,7 +80,7 @@ final class DirectTransport {
             if (privateKey.isEmpty()) throw new IllegalArgumentException("SSH 私钥不能为空");
             String passphrase = config.optString("sshPrivateKeyPassphrase");
             jsch.addIdentity(
-                    "dbx-mobile",
+                    "mobile-db-manager",
                     privateKey.getBytes(StandardCharsets.UTF_8),
                     null,
                     passphrase.isEmpty() ? null : passphrase.getBytes(StandardCharsets.UTF_8));
@@ -178,7 +178,7 @@ final class DirectTransport {
         @Override public void add(HostKey hostKey, UserInfo userInfo) {}
         @Override public void remove(String host, String type) {}
         @Override public void remove(String host, String type, byte[] key) {}
-        @Override public String getKnownHostsRepositoryID() { return "DBX pinned SHA256 fingerprint"; }
+        @Override public String getKnownHostsRepositoryID() { return "Mobile DB Manager pinned SHA256 fingerprint"; }
         @Override public HostKey[] getHostKey() { return new HostKey[0]; }
         @Override public HostKey[] getHostKey(String host, String type) { return new HostKey[0]; }
     }

@@ -1,4 +1,4 @@
-package com.houtsider.dbx;
+package com.coolbanhub.mobiledbmanager;
 
 import android.os.Build;
 import android.view.View;

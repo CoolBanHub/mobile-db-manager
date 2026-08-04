@@ -2,7 +2,7 @@
  * Copyright (c) 2025, PostgreSQL Global Development Group
  * BSD-2-Clause licensed as part of the PostgreSQL JDBC Driver.
  *
- * Android adaptation: DBX replaces ManagementFactory with Runtime.maxMemory()
+ * Android adaptation: Mobile DB Manager replaces ManagementFactory with Runtime.maxMemory()
  * because Android does not provide the Java SE java.lang.management module.
  */
 

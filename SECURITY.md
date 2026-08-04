@@ -10,7 +10,7 @@ Use GitHub's private vulnerability reporting for this repository when available.
 
 Helpful reports include:
 
-- Affected DBX version or commit.
+- Affected Mobile DB Manager version or commit.
 - Operating system and installation method.
 - The impacted area, such as Android connection storage, native database drivers, SQL execution, Redis/MongoDB/etcd browsing, SSH tunnel, HTTP proxy, or file sharing.
 - Steps to reproduce in a safe test environment.

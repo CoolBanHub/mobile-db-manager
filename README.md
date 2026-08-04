@@ -91,16 +91,29 @@ cd android
 pnpm android:device:test
 ```
 
+## GitHub Release
+
+推送 `release/v*` 标签会触发 GitHub Actions 构建 Debug APK，并上传到对应的
+GitHub Release。
+
+```bash
+git tag release/v0.1.0
+git push origin release/v0.1.0
+```
+
+也可以在 GitHub Actions 页面手动运行 `Android Release APK` workflow，并填写
+类似 `release/v0.1.0` 的标签。
+
 ## 发布签名
 
 发布前设置以下环境变量：
 
-- `DBX_ANDROID_KEYSTORE`
-- `DBX_ANDROID_STORE_PASSWORD`
-- `DBX_ANDROID_KEY_ALIAS`
-- `DBX_ANDROID_KEY_PASSWORD`
-- `DBX_ANDROID_VERSION_CODE`
-- `DBX_ANDROID_VERSION_NAME`
+- `MOBILE_DB_MANAGER_ANDROID_KEYSTORE`
+- `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
+- `MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS`
+- `MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD`
+- `MOBILE_DB_MANAGER_ANDROID_VERSION_CODE`
+- `MOBILE_DB_MANAGER_ANDROID_VERSION_NAME`
 
 然后执行：
 

@@ -40,7 +40,7 @@ describe("connectionPreferences", () => {
     expect(parseConnectionTags(" 核心， 只读,核心、临时环境 ")).toEqual(["核心", "只读", "临时环境"]);
 
     const storage = memoryStorage();
-    storage.setItem("dbx-mobile.connection-preferences.v1", JSON.stringify({
+    storage.setItem("mobile-db-manager.connection-preferences.v1", JSON.stringify({
       legacy: { group: "旧分组", favorite: false, environment: "development" },
     }));
     expect(getConnectionPreference("legacy", false, storage).tags).toEqual([]);

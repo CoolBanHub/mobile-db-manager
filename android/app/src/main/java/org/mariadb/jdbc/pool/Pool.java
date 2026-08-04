@@ -21,7 +21,7 @@ import org.mariadb.jdbc.Driver;
 /**
  * Android-compatible MariaDB pool facade.
  *
- * <p>DBX uses non-pooled direct connections. If a pooled MariaDB URL is supplied
+ * <p>Mobile DB Manager uses non-pooled direct connections. If a pooled MariaDB URL is supplied
  * by external code, this facade keeps the driver's binary contract and returns
  * an independent physical connection without Java SE JMX registration.
  */

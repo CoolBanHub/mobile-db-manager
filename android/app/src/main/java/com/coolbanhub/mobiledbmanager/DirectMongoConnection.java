@@ -1,4 +1,4 @@
-package com.houtsider.dbx;
+package com.coolbanhub.mobiledbmanager;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;

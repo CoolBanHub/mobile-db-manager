@@ -39,8 +39,8 @@ interface DirectDatabasePlugin {
 }
 
 const DirectDatabase = registerPlugin<DirectDatabasePlugin>("DirectDatabase");
-export const DIRECT_HISTORY_KEY = "dbx-mobile.direct.history.v1";
-const SAVED_SQL_KEY = "dbx-mobile.direct.saved-sql.v1";
+export const DIRECT_HISTORY_KEY = "mobile-db-manager.direct.history.v1";
+const SAVED_SQL_KEY = "mobile-db-manager.direct.saved-sql.v1";
 
 /**
  * 原生直连能力只允许在 Android 容器中调用。

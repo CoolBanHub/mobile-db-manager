@@ -37,7 +37,7 @@ const theme = ref<ColorTheme>("light");
 // 数据库能力表决定浏览器组件；新增类型时无需在多个导航入口重复判断。
 const queryConnections = computed(() => connections.value.filter((connection) => ["postgres", "mysql", "sqlserver", "redis", "mongodb"].includes(connection.dbType)));
 const browsingMode = computed(() => (browsingConnection.value ? databaseCapability(browsingConnection.value.dbType).browse : null));
-const headerTitle = computed(() => browsingConnection.value?.name || (activeSection.value === "connections" ? "DBX" : sectionLabel(activeSection.value)));
+const headerTitle = computed(() => browsingConnection.value?.name || (activeSection.value === "connections" ? "Mobile DB" : sectionLabel(activeSection.value)));
 const headerSubtitle = computed(() => {
   if (browsingConnection.value) {
     const connection = browsingConnection.value;

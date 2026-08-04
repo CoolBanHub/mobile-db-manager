@@ -214,7 +214,7 @@ export async function exportQueryResult(
           encoding: Encoding.UTF8,
         });
   await Share.share({
-    title: "DBX 查询结果",
+    title: "Mobile DB Manager 查询结果",
     text: `${context.database}${context.schema ? ` / ${context.schema}` : ""} · ${context.result.rows.length} 行`,
     files: [written.uri],
     dialogTitle: `分享 ${format.toUpperCase()} 查询结果`,

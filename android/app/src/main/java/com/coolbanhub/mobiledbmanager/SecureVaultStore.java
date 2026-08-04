@@ -1,4 +1,4 @@
-package com.houtsider.dbx;
+package com.coolbanhub.mobiledbmanager;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -16,7 +16,7 @@ import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 
 final class SecureVaultStore {
-    static final String KEY_ALIAS = "dbx_mobile_session_v1";
+    static final String KEY_ALIAS = "mobile_db_manager_session_v1";
     static final String PREFERENCES = "dbx_secure_vault";
     static final String VALUE_SUFFIX = ".value";
     static final String IV_SUFFIX = ".iv";

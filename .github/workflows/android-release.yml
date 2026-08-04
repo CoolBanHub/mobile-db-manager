@@ -3,11 +3,11 @@ name: Android Release APK
 on:
   push:
     tags:
-      - "v*"
+      - "release/v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.1.0"
+        description: "Release tag, for example release/v0.1.0"
         required: true
         type: string
       prerelease:
@@ -38,6 +38,11 @@ jobs:
           else
             tag="${{ inputs.tag }}"
             prerelease="${{ inputs.prerelease }}"
+          fi
+
+          if [[ "${tag}" != release/v* ]]; then
+            echo "::error::Release tag must start with release/v, for example release/v0.1.0"
+            exit 1
           fi
 
           safe_tag="${tag//\//-}"
