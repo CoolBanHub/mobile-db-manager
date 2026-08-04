@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { loadDirectMetadata } from "../lib/direct/metadata";
-import { loadDirectMongoCollections, loadDirectMongoDatabases } from "../lib/direct/mongo";
-import { cancelDirectQuery, executeDirectQuery, explainDirectQuery } from "../lib/direct/query";
-import { saveDirectSavedSql } from "../lib/direct/savedSql";
-import { isMobileSqlDatabase } from "../lib/databaseCapabilities";
-import type { ColumnInfo, DatabaseInfo, MobileConnectionSummary, MobileQueryDraft, QueryResult, SavedSqlFile, TableInfo } from "../lib/mobileTypes";
-import { exportQueryResult, type QueryExportFormat } from "../lib/queryExport";
-import { applySqlSuggestion, buildColumnCondition, buildTableSelect, editorKeywords, formatSql, mergeTableMetadata, sqlSuggestions, type SqlSuggestion } from "../lib/sqlEditor";
-import { parseSqlParameterJson, resolveSqlParameters } from "../lib/sqlParameters";
+import { isMobileSqlDatabase } from "@/lib/databaseCapabilities";
+import { loadDirectMetadata } from "@/lib/direct/metadata";
+import { loadDirectMongoCollections, loadDirectMongoDatabases } from "@/lib/direct/mongo";
+import { cancelDirectQuery, executeDirectQuery, explainDirectQuery } from "@/lib/direct/query";
+import { saveDirectSavedSql } from "@/lib/direct/savedSql";
+import type { ColumnInfo, DatabaseInfo, MobileConnectionSummary, MobileQueryDraft, QueryResult, SavedSqlFile, TableInfo } from "@/lib/mobileTypes";
+import { exportQueryResult, type QueryExportFormat } from "@/lib/queryExport";
+import { applySqlSuggestion, buildColumnCondition, buildTableSelect, editorKeywords, formatSql, mergeTableMetadata, sqlSuggestions, type SqlSuggestion } from "@/lib/sqlEditor";
+import { parseSqlParameterJson, resolveSqlParameters } from "@/lib/sqlParameters";
 
 type ExecutionMode = "safe" | "advanced";
 

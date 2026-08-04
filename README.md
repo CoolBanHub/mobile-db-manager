@@ -107,6 +107,13 @@ pnpm android:device:test
 
 详细代码定位见 [代码地图](docs/CODEMAP.md)。
 
+前端页面放在 `src/features/`：
+
+- `connections/`：连接管理。
+- `query/`：SQL 工作台、历史和收藏。
+- `browse/relational/`：关系型数据库元数据和表数据浏览。
+- `browse/redis/`、`browse/mongo/`、`browse/etcd/`：各自数据库的数据浏览器。
+
 前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
 
 - `connections.ts`：连接列表、保存、删除和测试。

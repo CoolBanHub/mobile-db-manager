@@ -12,6 +12,16 @@
 
 开始修改前先看 `docs/CODEMAP.md`，用它定位功能对应的页面、前端 API 和 Android 原生类。
 
+前端页面按 feature 放在 `src/features/`：
+
+- `src/app/DirectApp.vue`：应用壳、底部导航、浏览/查询页面切换和 Android 返回键。
+- `src/features/connections/`：连接列表、连接编辑表单、收藏、分组、搜索。
+- `src/features/query/`：SQL 工作台、查询历史、本机 SQL 收藏、查询结果展示。
+- `src/features/browse/relational/`：PostgreSQL、MySQL/MariaDB、SQL Server 的元数据和表数据浏览。
+- `src/features/browse/redis/`：Redis Key 浏览和固定写入动作。
+- `src/features/browse/mongo/`：MongoDB 数据库、集合、文档浏览和编辑。
+- `src/features/browse/etcd/`：etcd 前缀、键值详情和 put/delete。
+
 前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
 
 - `connections.ts`：连接列表、保存、删除和测试。

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { loadDirectMongoCollections, loadDirectMongoDatabases, loadDirectMongoDocuments, mutateDirectMongo } from "../lib/direct/mongo";
-import type { MobileConnectionSummary } from "../lib/mobileTypes";
+import { loadDirectMongoCollections, loadDirectMongoDatabases, loadDirectMongoDocuments, mutateDirectMongo } from "@/lib/direct/mongo";
+import type { MobileConnectionSummary } from "@/lib/mobileTypes";
 
 const props = defineProps<{ connection: MobileConnectionSummary }>();
 

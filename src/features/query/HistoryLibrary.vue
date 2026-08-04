@@ -4,7 +4,7 @@ import {
   clearDirectHistory,
   deleteDirectHistoryEntry,
   searchDirectHistory,
-} from "../lib/direct/history";
+} from "@/lib/direct/history";
 import {
   deleteDirectSavedSql,
   deleteDirectSavedSqlFolder,
@@ -12,7 +12,7 @@ import {
   loadDirectSavedSqlLibrary,
   saveDirectSavedSql,
   saveDirectSavedSqlFolder,
-} from "../lib/direct/savedSql";
+} from "@/lib/direct/savedSql";
 import type {
   MobileConnectionSummary,
   MobileHistoryCursor,
@@ -22,7 +22,7 @@ import type {
   SavedSqlFolder,
   SavedSqlFile,
   SavedSqlLibrary,
-} from "../lib/mobileTypes";
+} from "@/lib/mobileTypes";
 
 const PAGE_SIZE = 20;
 

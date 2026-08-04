@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref } from "vue";
-import { deleteDirectConnection, getDirectConnection, saveDirectConnection, testDirectConnection } from "../lib/direct/connections";
-import type { MobileConnectionDraft, MobileConnectionSummary } from "../lib/mobileTypes";
-import { databaseCapability, mobileDatabaseCapabilities } from "../lib/databaseCapabilities";
-import { getConnectionPreference, parseConnectionTags, removeConnectionPreference, saveConnectionPreference, type ConnectionEnvironment } from "../lib/connectionPreferences";
-import postgresIcon from "../assets/database-icons/postgres.svg";
-import redisIcon from "../assets/database-icons/redis.svg";
-import mongodbIcon from "../assets/database-icons/mongodb.svg";
-import sqlserverIcon from "../assets/database-icons/sqlserver.svg";
-import etcdIcon from "../assets/database-icons/etcd.svg";
+import postgresIcon from "@/assets/database-icons/postgres.svg";
+import redisIcon from "@/assets/database-icons/redis.svg";
+import mongodbIcon from "@/assets/database-icons/mongodb.svg";
+import sqlserverIcon from "@/assets/database-icons/sqlserver.svg";
+import etcdIcon from "@/assets/database-icons/etcd.svg";
+import { getConnectionPreference, parseConnectionTags, removeConnectionPreference, saveConnectionPreference, type ConnectionEnvironment } from "@/lib/connectionPreferences";
+import { databaseCapability, mobileDatabaseCapabilities } from "@/lib/databaseCapabilities";
+import { deleteDirectConnection, getDirectConnection, saveDirectConnection, testDirectConnection } from "@/lib/direct/connections";
+import type { MobileConnectionDraft, MobileConnectionSummary } from "@/lib/mobileTypes";
 
 const props = defineProps<{ connections: MobileConnectionSummary[] }>();
 

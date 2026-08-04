@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { loadDirectEtcdEntries, loadDirectEtcdEntry, loadDirectEtcdOverview, mutateDirectEtcd } from "../lib/direct/etcd";
-import type { MobileConnectionSummary, MobileEtcdEntry, MobileEtcdOverview } from "../lib/mobileTypes";
+import { loadDirectEtcdEntries, loadDirectEtcdEntry, loadDirectEtcdOverview, mutateDirectEtcd } from "@/lib/direct/etcd";
+import type { MobileConnectionSummary, MobileEtcdEntry, MobileEtcdOverview } from "@/lib/mobileTypes";
 
 const props = defineProps<{ connection: MobileConnectionSummary }>();
 

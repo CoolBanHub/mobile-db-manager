@@ -121,6 +121,13 @@ pnpm android:device:test
 
 For a detailed feature-to-file index, see [Code Map](docs/CODEMAP.md).
 
+Frontend pages live in `src/features/`:
+
+- `connections/`: connection management.
+- `query/`: SQL workbench, history, and saved SQL.
+- `browse/relational/`: relational metadata and table data browser.
+- `browse/redis/`, `browse/mongo/`, `browse/etcd/`: database-specific browsers.
+
 Frontend direct database APIs live in `src/lib/direct/`:
 
 - `connections.ts`: connection list, save, delete, and test.
