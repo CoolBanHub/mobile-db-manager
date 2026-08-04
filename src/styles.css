@@ -492,6 +492,25 @@ button {
   stroke-linejoin: round;
 }
 
+.update-action {
+  position: relative;
+}
+
+.update-action.pending {
+  color: var(--acid);
+}
+
+.update-action i {
+  position: absolute;
+  top: 8px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border: 2px solid var(--panel);
+  border-radius: 999px;
+  background: var(--danger);
+}
+
 .app-header:has(.header-back) .app-title h1 {
   font-size: 15px;
   letter-spacing: -0.01em;
@@ -531,6 +550,133 @@ button {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.update-banner {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 12px;
+  border: 1px solid color-mix(in srgb, var(--acid) 30%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--panel));
+  padding: 10px;
+  box-shadow: 0 12px 28px rgba(23, 32, 51, 0.06);
+}
+
+.app-shell:has(.table-data) .update-banner {
+  display: none;
+}
+
+.update-banner[data-state="error"] {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+}
+
+.update-banner[data-state="downloaded"],
+.update-banner[data-state="current"] {
+  border-color: color-mix(in srgb, var(--success) 34%, var(--line));
+  background: color-mix(in srgb, var(--success) 7%, var(--panel));
+}
+
+.update-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--acid);
+}
+
+.update-banner[data-state="error"] .update-mark {
+  color: var(--danger);
+}
+
+.update-banner[data-state="downloaded"] .update-mark,
+.update-banner[data-state="current"] .update-mark {
+  color: var(--success);
+}
+
+.update-mark svg,
+.update-dismiss svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.update-mark span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.update-copy {
+  min-width: 0;
+}
+
+.update-copy h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 720;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-copy p,
+.update-copy small {
+  display: block;
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.update-primary,
+.update-secondary,
+.update-dismiss {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.update-primary,
+.update-secondary {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+.update-primary {
+  background: var(--acid);
+  color: #ffffff;
+}
+
+.update-secondary {
+  border: 1px solid var(--line);
+  color: var(--acid);
+}
+
+.update-dismiss {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: var(--muted);
 }
 
 .empty-module {

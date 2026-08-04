@@ -45,9 +45,23 @@ jobs:
             exit 1
           fi
 
+          version="${tag#release/v}"
+          if [[ "${version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+          else
+            echo "::error::Release tag must use release/vMAJOR.MINOR.PATCH, for example release/v0.1.0"
+            exit 1
+          fi
+
+          version_code=$((10#${major} * 1000000 + 10#${minor} * 1000 + 10#${patch} + 1))
+
           safe_tag="${tag//\//-}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          echo "version_name=${version}" >> "${GITHUB_OUTPUT}"
+          echo "version_code=${version_code}" >> "${GITHUB_OUTPUT}"
           echo "asset_name=mobile-db-manager-${safe_tag}.apk" >> "${GITHUB_OUTPUT}"
 
       - name: Setup Java
@@ -85,6 +99,9 @@ jobs:
         run: pnpm test
 
       - name: Build debug APK
+        env:
+          MOBILE_DB_MANAGER_ANDROID_VERSION_NAME: ${{ steps.release.outputs.version_name }}
+          MOBILE_DB_MANAGER_ANDROID_VERSION_CODE: ${{ steps.release.outputs.version_code }}
         run: pnpm android:build:debug
 
       - name: Prepare release asset

@@ -25,6 +25,7 @@
 | SSH 隧道、HTTP CONNECT 代理、路由清理 | 连接表单相关 UI | 连接配置字段 | `DirectTransport.java` |
 | Capacitor 插件入口、参数读取、统一错误返回 | 调用方组件 | `src/lib/direct/native.ts` | `DirectDatabasePlugin.java`、`DirectErrors.java` |
 | 移动键盘适配 | `src/app/DirectApp.vue` 和输入组件 | `src/lib/mobileKeyboard.ts` | `MobileKeyboardPlugin.java` |
+| GitHub Release 自动更新和 APK 下载 | `src/features/update/UpdateBanner.vue`、`src/app/DirectApp.vue` | `src/lib/appUpdate.ts` | `AppUpdatePlugin.java`、`AppReleaseUpdateService.java`、`AppUpdateVersion.java` |
 
 ## 当前大组件
 
@@ -66,7 +67,7 @@
 | MongoDB 某个集合无法读取 | `MongoDataBrowser.vue`、`DirectMongoActions.java`、`DirectMongoConnection.java` |
 | etcd 前缀查询结果不对或二进制值被破坏 | `EtcdDataBrowser.vue`、`DirectEtcdActions.java`、`DirectEtcdConnection.java` |
 | SSH/HTTP 代理连接后没有释放 | `DirectTransport.java` |
-| GitHub Release 没有 APK | `.github/workflows/android-release.yml`、`scripts/build-release.mjs` |
+| GitHub Release 没有 APK 或应用内更新找不到新版 | `.github/workflows/android-release.yml`、`AppReleaseUpdateService.java`、`src/lib/appUpdate.ts` |
 
 ## 约定
 

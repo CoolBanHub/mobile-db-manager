@@ -42,6 +42,8 @@ SSH tunnel, HTTP CONNECT proxy.
 - Use TLS, SSH local port forwarding, and HTTP CONNECT proxy tunnels.
 - Format SQL, use named JSON parameters, autocomplete metadata, cancel queries,
   store query history, save local SQL snippets, and share exported results.
+- Check GitHub Releases for the latest `release/v*` APK and download updates
+  through Android's system download manager.
 
 ## Database Support
 
@@ -127,6 +129,7 @@ Frontend pages live in `src/features/`:
 - `query/`: SQL workbench, history, and saved SQL.
 - `browse/relational/`: relational metadata and table data browser.
 - `browse/redis/`, `browse/mongo/`, `browse/etcd/`: database-specific browsers.
+- `update/`: GitHub Release update banner and APK download entry point.
 
 Frontend direct database APIs live in `src/lib/direct/`:
 
@@ -138,6 +141,9 @@ Frontend direct database APIs live in `src/lib/direct/`:
 - `redis.ts`, `mongo.ts`, `etcd.ts`: database-specific browser and write actions.
 - `history.ts`, `savedSql.ts`: local query history and saved SQL library.
 - `native.ts`, `localStore.ts`: Capacitor native bridge and localStorage helpers.
+
+App update APIs live in `src/lib/appUpdate.ts`. They call the Android
+`AppUpdate` plugin and stay separate from the direct database APIs.
 
 Android native direct-connect code lives in
 `android/app/src/main/java/com/coolbanhub/mobiledbmanager/`:
@@ -156,6 +162,8 @@ Android native direct-connect code lives in
 - `DirectTransport.java`: SSH forwarding and HTTP CONNECT tunnels.
 - `DirectConnectionStore.java`, `SecureVaultStore.java`: connection config and
   secret storage.
+- `AppUpdatePlugin.java`, `AppReleaseUpdateService.java`, `AppUpdateVersion.java`:
+  GitHub Release checks, APK downloads, and version comparison.
 
 When adding a new database type, add a matching frontend API file, native action
 file, and low-level connection client. Do not put new database logic back into
@@ -173,6 +181,9 @@ git push origin release/v0.1.0
 
 You can also run the `Android Release APK` workflow manually from GitHub Actions
 and provide a tag such as `release/v0.1.0`.
+
+The workflow derives Android `versionName` and monotonic `versionCode` values
+from `release/vMAJOR.MINOR.PATCH`. In-app update checks use the same rule.
 
 ## Release Signing
 

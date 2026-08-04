@@ -21,6 +21,7 @@
 - `src/features/browse/redis/`：Redis Key 浏览和固定写入动作。
 - `src/features/browse/mongo/`：MongoDB 数据库、集合、文档浏览和编辑。
 - `src/features/browse/etcd/`：etcd 前缀、键值详情和 put/delete。
+- `src/features/update/`：GitHub Release 更新提示和 APK 下载入口。
 
 前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
 
@@ -32,6 +33,8 @@
 - `history.ts`、`savedSql.ts`：本机历史记录和 SQL 收藏。
 - `native.ts`、`localStore.ts`：Capacitor 原生桥接和本机 localStorage 工具。
 
+应用更新 API 放在 `src/lib/appUpdate.ts`，不要塞进数据库直连 API。
+
 Android 原生直连代码放在 `android/app/src/main/java/com/coolbanhub/mobiledbmanager/`：
 
 - `DirectDatabasePlugin.java`：Capacitor 入口，只做参数读取、安全门和分发。
@@ -42,6 +45,7 @@ Android 原生直连代码放在 `android/app/src/main/java/com/coolbanhub/mobil
 - `DirectRedisConnection.java`、`DirectMongoConnection.java`、`DirectEtcdConnection.java`：各数据库的底层连接客户端。
 - `DirectTransport.java`：SSH 转发和 HTTP CONNECT 隧道。
 - `DirectConnectionStore.java`、`SecureVaultStore.java`：连接配置和敏感信息保存。
+- `AppUpdatePlugin.java`、`AppReleaseUpdateService.java`、`AppUpdateVersion.java`：GitHub Release 检查、APK 下载和版本比较。
 
 新增数据库类型时，优先新增对应的前端 API 文件、原生 action 文件和底层连接客户端；不要继续把新逻辑塞回 `DirectDatabasePlugin.java` 或 `src/lib/directDatabase.ts`。
 
@@ -67,6 +71,7 @@ Android 原生直连代码放在 `android/app/src/main/java/com/coolbanhub/mobil
 - 发布标签使用 `release/v*`，例如 `release/v0.0.1`。
 - 不要移动已经发布过的 tag；如需基于新提交重新打包，创建新的 release tag。
 - tag 发布会构建 Debug APK 并上传到对应 GitHub Release。
+- release workflow 必须从 `release/vMAJOR.MINOR.PATCH` 设置 Android `versionName` 和单调递增 `versionCode`，应用内更新依赖这个规则。
 - 签名发布只通过环境变量提供 keystore 和密码，不提交密钥文件。
 
 ## 验证命令

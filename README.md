@@ -29,6 +29,7 @@ Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端�
 - 支持 TLS、SSH 本地端口转发和 HTTP CONNECT 代理。
 - 支持 SQL 格式化、具名 JSON 参数、元数据补全、查询取消、查询历史、本机 SQL
   收藏和结果导出分享。
+- 支持从 GitHub Releases 检查最新 `release/v*` APK，并通过 Android 系统下载更新。
 
 ## 数据库支持
 
@@ -113,6 +114,7 @@ pnpm android:device:test
 - `query/`：SQL 工作台、历史和收藏。
 - `browse/relational/`：关系型数据库元数据和表数据浏览。
 - `browse/redis/`、`browse/mongo/`、`browse/etcd/`：各自数据库的数据浏览器。
+- `update/`：GitHub Release 更新提示和下载入口。
 
 前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
 
@@ -123,6 +125,9 @@ pnpm android:device:test
 - `redis.ts`、`mongo.ts`、`etcd.ts`：各自数据库的数据浏览和固定写入动作。
 - `history.ts`、`savedSql.ts`：本机历史记录和 SQL 收藏。
 - `native.ts`、`localStore.ts`：Capacitor 原生桥接和本机 localStorage 工具。
+
+应用更新 API 放在 `src/lib/appUpdate.ts`，它只负责调用 Android `AppUpdate`
+插件，不混入数据库直连 API。
 
 Android 原生直连代码在
 `android/app/src/main/java/com/coolbanhub/mobiledbmanager/`：
@@ -138,6 +143,8 @@ Android 原生直连代码在
   `DirectEtcdConnection.java`：各数据库的底层连接客户端。
 - `DirectTransport.java`：SSH 转发和 HTTP CONNECT 隧道。
 - `DirectConnectionStore.java`、`SecureVaultStore.java`：连接配置和敏感信息保存。
+- `AppUpdatePlugin.java`、`AppReleaseUpdateService.java`、`AppUpdateVersion.java`：
+  GitHub Release 检查、APK 下载和版本比较。
 
 新增数据库类型时，优先新增对应的前端 API 文件、原生 action 文件和底层连接
 客户端，不要继续把逻辑堆到 `DirectDatabasePlugin.java` 里。
@@ -154,6 +161,9 @@ git push origin release/v0.1.0
 
 也可以在 GitHub Actions 页面手动运行 `Android Release APK` workflow，并填写
 类似 `release/v0.1.0` 的标签。
+
+workflow 会从 `release/vMAJOR.MINOR.PATCH` 自动设置 Android `versionName`
+和递增 `versionCode`，应用内更新检查也使用同一套规则。
 
 ## 发布签名
 

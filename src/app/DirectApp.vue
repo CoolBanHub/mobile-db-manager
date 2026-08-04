@@ -10,12 +10,16 @@ import MetadataBrowser from "@/features/browse/relational/MetadataBrowser.vue";
 import RedisDataBrowser from "@/features/browse/redis/RedisDataBrowser.vue";
 import ConnectionManager from "@/features/connections/ConnectionManager.vue";
 import QueryWorkbench from "@/features/query/QueryWorkbench.vue";
+import UpdateBanner from "@/features/update/UpdateBanner.vue";
+import { checkLatestAppUpdate, downloadLatestAppUpdate, supportsAppUpdate, type AppUpdateInfo } from "@/lib/appUpdate";
 import { databaseCapability } from "@/lib/databaseCapabilities";
 import { listDirectConnections } from "@/lib/direct/connections";
 import type { MobileConnectionSummary, MobileQueryDraft } from "@/lib/mobileTypes";
 
 type MobileSection = "connections" | "query";
 type ColorTheme = "light" | "dark";
+type UpdateState = "idle" | "checking" | "available" | "current" | "downloading" | "downloaded" | "error";
+type VisibleUpdateState = Exclude<UpdateState, "idle">;
 type BackHandler = { handleBack: () => boolean };
 type BrowseQueryContext = { connectionId: string; database: string; schema: string | null };
 type BrowseHandler = BackHandler & { getQueryContext: () => BrowseQueryContext | null };
@@ -33,11 +37,16 @@ const mongoDataBrowser = ref<BrowseHandler | null>(null);
 const redisDataBrowser = ref<BrowseHandler | null>(null);
 const etcdDataBrowser = ref<BackHandler | null>(null);
 const queryWorkbench = ref<BackHandler | null>(null);
+const canCheckAppUpdate = supportsAppUpdate();
+const updateState = ref<UpdateState>("idle");
+const updateInfo = ref<AppUpdateInfo | null>(null);
+const updateMessage = ref("");
 const theme = ref<ColorTheme>("light");
 const pageMotion = ref<"next" | "previous" | "">("");
 // 数据库能力表决定浏览器组件；新增类型时无需在多个导航入口重复判断。
 const queryConnections = computed(() => connections.value.filter((connection) => ["postgres", "mysql", "sqlserver", "redis", "mongodb"].includes(connection.dbType)));
 const browsingMode = computed(() => (browsingConnection.value ? databaseCapability(browsingConnection.value.dbType).browse : null));
+const visibleUpdateState = computed<VisibleUpdateState | null>(() => (updateState.value === "idle" ? null : updateState.value));
 const headerTitle = computed(() => browsingConnection.value?.name || (activeSection.value === "connections" ? "Mobile DB" : sectionLabel(activeSection.value)));
 const headerSubtitle = computed(() => {
   if (browsingConnection.value) {
@@ -55,7 +64,8 @@ const LAST_BROWSE_CONNECTION_KEY = "mobile-db-last-browse-connection";
 const LEGACY_LAST_BROWSE_CONNECTION_KEY = "dbx-last-browse-connection";
 const COLOR_THEME_KEY = "mobile-db-color-theme";
 const LEGACY_COLOR_THEME_KEY = "dbx-color-theme";
-const PAGE_SWIPE_IGNORED_SELECTOR = "input, textarea, select, [role='dialog'], [role='separator'], .result-scroll, .query-tabs, .object-tabs, .detail-tabs, .schema-switcher";
+const UPDATE_DISMISSED_TAG_KEY = "mobile-db-dismissed-update-tag";
+const PAGE_SWIPE_IGNORED_SELECTOR = "input, textarea, select, [role='dialog'], [role='separator'], .result-scroll, .query-tabs, .object-tabs, .detail-tabs, .schema-switcher, .update-banner";
 
 async function loadConnections() {
   connectionsLoading.value = true;
@@ -214,6 +224,62 @@ function handleHeaderMore() {
   toggleTheme();
 }
 
+function messageFromError(error: unknown) {
+  return error instanceof Error ? error.message : "无法连接 GitHub Releases";
+}
+
+async function checkForUpdates(manual = false) {
+  if (!canCheckAppUpdate || updateState.value === "checking" || updateState.value === "downloading") return;
+  if (manual) {
+    updateState.value = "checking";
+    updateMessage.value = "";
+  }
+  try {
+    const info = await checkLatestAppUpdate();
+    updateInfo.value = info;
+    const dismissedTag = localStorage.getItem(UPDATE_DISMISSED_TAG_KEY);
+    if (info.hasUpdate && info.latestTag !== dismissedTag) {
+      updateState.value = "available";
+      updateMessage.value = "";
+    } else if (manual) {
+      updateState.value = "current";
+      updateMessage.value = info.latestTag ? `最新 Release：${info.latestTag}` : "";
+    } else {
+      updateState.value = "idle";
+      updateMessage.value = "";
+    }
+  } catch (error) {
+    if (!manual) {
+      console.warn("Update check failed", error);
+      return;
+    }
+    updateState.value = "error";
+    updateMessage.value = messageFromError(error);
+  }
+}
+
+async function downloadUpdate() {
+  if (!updateInfo.value || updateState.value === "downloading") return;
+  updateState.value = "downloading";
+  updateMessage.value = updateInfo.value.apkName;
+  try {
+    const result = await downloadLatestAppUpdate(updateInfo.value);
+    updateState.value = "downloaded";
+    updateMessage.value = result.openedExternal ? "已打开下载页面" : `已开始下载：${result.fileName}`;
+  } catch (error) {
+    updateState.value = "error";
+    updateMessage.value = messageFromError(error);
+  }
+}
+
+function dismissUpdate() {
+  if (updateInfo.value?.latestTag && (updateState.value === "available" || updateState.value === "downloaded")) {
+    localStorage.setItem(UPDATE_DISMISSED_TAG_KEY, updateInfo.value.latestTag);
+  }
+  updateState.value = "idle";
+  updateMessage.value = "";
+}
+
 function leaveQuery() {
   const previousSection = sectionHistory.value.pop();
   activeSection.value = previousSection && previousSection !== "query" ? previousSection : "connections";
@@ -260,6 +326,7 @@ onMounted(async () => {
   if (Capacitor.isNativePlatform()) {
     backButtonListener = await CapacitorApp.addListener("backButton", handleHardwareBack);
   }
+  void checkForUpdates(false);
   await loadConnections();
 });
 
@@ -299,6 +366,14 @@ onBeforeUnmount(() => {
               <path d="m16 16 4 4" />
             </svg>
           </button>
+          <button v-if="canCheckAppUpdate" class="header-action update-action" :class="{ pending: updateInfo?.hasUpdate }" type="button" aria-label="检查更新" title="检查更新" @click="checkForUpdates(true)">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v11" />
+              <path d="m7 10 5 5 5-5" />
+              <path d="M5 20h14" />
+            </svg>
+            <i v-if="updateInfo?.hasUpdate" aria-hidden="true"></i>
+          </button>
           <button class="theme-toggle" type="button" :aria-label="theme === 'light' ? '切换深色模式' : '切换浅色模式'" :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'" @click="handleHeaderMore">
             <svg v-if="theme === 'dark'" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20.4 15.2A8.2 8.2 0 0 1 8.8 3.6 8.5 8.5 0 1 0 20.4 15.2Z" />
@@ -309,6 +384,7 @@ onBeforeUnmount(() => {
             </svg>
           </button>
         </header>
+        <UpdateBanner v-if="visibleUpdateState" :state="visibleUpdateState" :info="updateInfo" :message="updateMessage" @check="checkForUpdates(true)" @download="downloadUpdate" @dismiss="dismissUpdate" />
 
         <div v-if="activeSection === 'connections'">
           <div v-if="connectionsLoading" class="empty-module compact">
