@@ -44,7 +44,7 @@ public class DirectDatabasePlugin extends Plugin {
             "drop", "truncate", "grant", "revoke", "call", "execute", "exec", "copy",
             "vacuum", "reindex", "attach", "detach", "load"));
     private static final Set<String> SUPPORTED_DATABASES = new HashSet<>(Arrays.asList(
-            "postgres", "mysql", "sqlserver", "redis", "mongodb"));
+            "postgres", "mysql", "sqlserver", "redis", "mongodb", "etcd"));
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, Statement> runningStatements = new ConcurrentHashMap<>();
@@ -127,6 +127,10 @@ public class DirectDatabasePlugin extends Plugin {
                 DirectMongoConnection.test(effective);
                 return new JSObject().put("message", "手机已直接连接 MongoDB");
             }
+            if (type.equals("etcd")) {
+                DirectEtcdConnection.test(effective);
+                return new JSObject().put("message", "手机已直接连接 etcd");
+            }
             try (Connection connection = open(effective, optionalDatabase(effective))) {
                 if (!connection.isValid(Math.max(1, draft.optInt("connectTimeoutSecs", 10)))) {
                     throw new SQLException("数据库没有通过连接有效性检查");
@@ -182,12 +186,426 @@ public class DirectDatabasePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void redis(PluginCall call) {
+        run(call, () -> {
+            JSONObject config = requiredConfig(call.getString("connectionId"));
+            if (!"redis".equals(config.optString("dbType"))) {
+                throw new IllegalArgumentException("当前连接不是 Redis");
+            }
+            String action = required(call.getString("action"), "action");
+            String database = call.getString("database", optionalDatabase(config));
+            boolean write = isRedisWriteAction(action);
+            // 所有写动作先经过统一安全门，再进入固定命令映射，WebView 不能下发任意 Redis 命令。
+            if (write) assertRedisWriteAllowed(config, call);
+            return executeRedisAction(config, database, action, call);
+        });
+    }
+
+    @PluginMethod
+    public void mongo(PluginCall call) {
+        run(call, () -> {
+            JSONObject config = requiredConfig(call.getString("connectionId"));
+            if (!"mongodb".equals(config.optString("dbType"))) {
+                throw new IllegalArgumentException("当前连接不是 MongoDB");
+            }
+            String action = required(call.getString("action"), "action");
+            // 写入校验放在 switch 之前，新增动作时只需维护动作分类即可继承保护。
+            if (isMongoWriteAction(action)) assertMongoWriteAllowed(config, call);
+            switch (action) {
+                case "databases":
+                    return stringArray(DirectMongoConnection.databases(config));
+                case "collections":
+                    return stringArray(DirectMongoConnection.collections(
+                            config,
+                            required(call.getString("database"), "database")));
+                case "documents": {
+                    DirectMongoConnection.Page page = DirectMongoConnection.documents(
+                            config,
+                            required(call.getString("database"), "database"),
+                            required(call.getString("collection"), "collection"),
+                            call.getString("filter", "{}"),
+                            call.getInt("offset", 0),
+                            call.getInt("limit", 25));
+                    return new JSObject()
+                            .put("documents", stringArray(page.documents))
+                            .put("offset", page.offset)
+                            .put("limit", page.limit)
+                            .put("hasMore", page.hasMore);
+                }
+                case "insert":
+                    return new JSObject().put("document", DirectMongoConnection.insert(
+                            config,
+                            required(call.getString("database"), "database"),
+                            required(call.getString("collection"), "collection"),
+                            required(call.getString("document"), "document")));
+                case "replace":
+                    return new JSObject().put("modifiedCount", DirectMongoConnection.replace(
+                            config,
+                            required(call.getString("database"), "database"),
+                            required(call.getString("collection"), "collection"),
+                            required(call.getString("original"), "original"),
+                            required(call.getString("document"), "document")));
+                case "delete":
+                    return new JSObject().put("deletedCount", DirectMongoConnection.delete(
+                            config,
+                            required(call.getString("database"), "database"),
+                            required(call.getString("collection"), "collection"),
+                            required(call.getString("original"), "original")));
+                default:
+                    throw new IllegalArgumentException("不支持的 MongoDB 操作：" + action);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void etcd(PluginCall call) {
+        run(call, () -> {
+            JSONObject config = requiredConfig(call.getString("connectionId"));
+            if (!"etcd".equals(config.optString("dbType"))) {
+                throw new IllegalArgumentException("当前连接不是 etcd");
+            }
+            String action = required(call.getString("action"), "action");
+            // etcd 桥接仅开放列表、详情和单键写入，不暴露事务或任意 Gateway 路径。
+            if (new HashSet<>(Arrays.asList("put", "delete")).contains(action)) {
+                assertEtcdWriteAllowed(config, call);
+            }
+            switch (action) {
+                case "overview": {
+                    JSONObject status = DirectEtcdConnection.status(config);
+                    JSONObject count = DirectEtcdConnection.count(config);
+                    return new JSObject()
+                            .put("version", status.optString("version", "—"))
+                            .put("dbSize", status.optString("dbSize", status.optString("db_size", "0")))
+                            .put("keyCount", count.optString("count", "0"));
+                }
+                case "list":
+                    return etcdRange(config, call.getString("prefix", ""), call.getInt("limit", 200));
+                case "detail":
+                    return etcdDetail(config, required(call.getString("key"), "key"));
+                case "put":
+                    return DirectEtcdConnection.put(
+                            config,
+                            required(call.getString("key"), "key"),
+                            call.getString("value", ""),
+                            call.getString("lease", "0"));
+                case "delete":
+                    return DirectEtcdConnection.delete(
+                            config,
+                            required(call.getString("key"), "key"));
+                default:
+                    throw new IllegalArgumentException("不支持的 etcd 操作：" + action);
+            }
+        });
+    }
+
+    @PluginMethod
     public void cancel(PluginCall call) {
         run(call, () -> {
             Statement statement = runningStatements.get(required(call.getString("executionId"), "executionId"));
             if (statement != null) statement.cancel();
             return new JSObject().put("cancelled", statement != null);
         });
+    }
+
+    private Object executeRedisAction(JSONObject config, String database, String action, PluginCall call)
+            throws Exception {
+        // 将界面动作映射为参数化命令数组，键和值不会被拼接为可执行命令文本。
+        switch (action) {
+            case "overview": {
+                List<Object> replies = DirectRedisConnection.execute(config, database, Arrays.asList(
+                        new String[]{"DBSIZE"},
+                        new String[]{"INFO", "keyspace"}));
+                return new JSObject()
+                        .put("keyCount", replies.get(0))
+                        .put("keyspace", replies.get(1));
+            }
+            case "scan": {
+                int count = Math.min(200, Math.max(10, call.getInt("count", 100)));
+                Object reply = DirectRedisConnection.execute(config, database, new String[]{
+                        "SCAN",
+                        call.getString("cursor", "0"),
+                        "MATCH",
+                        call.getString("pattern", "*"),
+                        "COUNT",
+                        String.valueOf(count)
+                });
+                List<?> page = requireRedisList(reply, "SCAN");
+                return new JSObject()
+                        .put("cursor", String.valueOf(page.get(0)))
+                        .put("keys", redisJsonValue(page.get(1)));
+            }
+            case "detail":
+                return redisKeyDetail(config, database, required(call.getString("key"), "key"));
+            case "delete":
+                return redisMutation(config, database, "DEL", required(call.getString("key"), "key"));
+            case "set-string":
+                return redisMutation(
+                        config,
+                        database,
+                        "SET",
+                        required(call.getString("key"), "key"),
+                        call.getString("value", ""),
+                        "KEEPTTL");
+            case "hset":
+                return redisMutation(
+                        config,
+                        database,
+                        "HSET",
+                        required(call.getString("key"), "key"),
+                        required(call.getString("field"), "field"),
+                        call.getString("value", ""));
+            case "hdel":
+                return redisMutation(
+                        config,
+                        database,
+                        "HDEL",
+                        required(call.getString("key"), "key"),
+                        required(call.getString("field"), "field"));
+            case "lset":
+                return redisMutation(
+                        config,
+                        database,
+                        "LSET",
+                        required(call.getString("key"), "key"),
+                        String.valueOf(call.getInt("index", 0)),
+                        call.getString("value", ""));
+            case "rpush":
+                return redisMutation(
+                        config,
+                        database,
+                        "RPUSH",
+                        required(call.getString("key"), "key"),
+                        call.getString("value", ""));
+            case "sadd":
+                return redisMutation(
+                        config,
+                        database,
+                        "SADD",
+                        required(call.getString("key"), "key"),
+                        required(call.getString("member"), "member"));
+            case "srem":
+                return redisMutation(
+                        config,
+                        database,
+                        "SREM",
+                        required(call.getString("key"), "key"),
+                        required(call.getString("member"), "member"));
+            case "zadd":
+                return redisMutation(
+                        config,
+                        database,
+                        "ZADD",
+                        required(call.getString("key"), "key"),
+                        required(call.getString("score"), "score"),
+                        required(call.getString("member"), "member"));
+            case "zrem":
+                return redisMutation(
+                        config,
+                        database,
+                        "ZREM",
+                        required(call.getString("key"), "key"),
+                        required(call.getString("member"), "member"));
+            case "expire": {
+                int seconds = call.getInt("seconds", -1);
+                if (seconds <= 0) {
+                    throw new IllegalArgumentException("TTL 必须大于 0 秒；如需删除键请使用删除操作");
+                }
+                return redisMutation(
+                        config,
+                        database,
+                        "EXPIRE",
+                        required(call.getString("key"), "key"),
+                        String.valueOf(seconds));
+            }
+            case "persist":
+                return redisMutation(config, database, "PERSIST", required(call.getString("key"), "key"));
+            default:
+                throw new IllegalArgumentException("不支持的 Redis 操作：" + action);
+        }
+    }
+
+    private JSObject redisKeyDetail(JSONObject config, String database, String key) throws Exception {
+        // 先读取公共元数据，再按类型选择有界的预览命令，避免对大集合执行全量读取。
+        List<Object> header = DirectRedisConnection.execute(config, database, Arrays.asList(
+                new String[]{"TYPE", key},
+                new String[]{"PTTL", key},
+                new String[]{"MEMORY", "USAGE", key}));
+        String type = String.valueOf(header.get(0));
+        JSObject result = new JSObject()
+                .put("key", key)
+                .put("type", type)
+                .put("ttlMs", header.get(1))
+                .put("memoryBytes", header.get(2));
+        switch (type) {
+            case "string":
+                result.put("value", redisJsonValue(
+                        DirectRedisConnection.execute(config, database, new String[]{"GET", key})));
+                break;
+            case "hash": {
+                List<Object> replies = DirectRedisConnection.execute(config, database, Arrays.asList(
+                        new String[]{"HLEN", key},
+                        new String[]{"HSCAN", key, "0", "COUNT", "200"}));
+                result.put("length", replies.get(0));
+                result.put("value", redisCollectionPage(replies.get(1), "HSCAN"));
+                break;
+            }
+            case "list": {
+                List<Object> replies = DirectRedisConnection.execute(config, database, Arrays.asList(
+                        new String[]{"LLEN", key},
+                        new String[]{"LRANGE", key, "0", "199"}));
+                result.put("length", replies.get(0));
+                result.put("value", redisJsonValue(replies.get(1)));
+                break;
+            }
+            case "set": {
+                List<Object> replies = DirectRedisConnection.execute(config, database, Arrays.asList(
+                        new String[]{"SCARD", key},
+                        new String[]{"SSCAN", key, "0", "COUNT", "200"}));
+                result.put("length", replies.get(0));
+                result.put("value", redisCollectionPage(replies.get(1), "SSCAN"));
+                break;
+            }
+            case "zset": {
+                List<Object> replies = DirectRedisConnection.execute(config, database, Arrays.asList(
+                        new String[]{"ZCARD", key},
+                        new String[]{"ZRANGE", key, "0", "199", "WITHSCORES"}));
+                result.put("length", replies.get(0));
+                result.put("value", redisJsonValue(replies.get(1)));
+                break;
+            }
+            case "stream": {
+                List<Object> replies = DirectRedisConnection.execute(config, database, Arrays.asList(
+                        new String[]{"XLEN", key},
+                        new String[]{"XRANGE", key, "-", "+", "COUNT", "100"}));
+                result.put("length", replies.get(0));
+                result.put("value", redisJsonValue(replies.get(1)));
+                break;
+            }
+            case "none":
+                result.put("value", JSONObject.NULL);
+                break;
+            default:
+                result.put("value", "安卓端暂不支持预览 " + type + " 类型");
+        }
+        return result;
+    }
+
+    private Object redisCollectionPage(Object reply, String command) {
+        List<?> page = requireRedisList(reply, command);
+        return redisJsonValue(page.size() > 1 ? page.get(1) : null);
+    }
+
+    private JSObject redisMutation(JSONObject config, String database, String... command) throws Exception {
+        return new JSObject().put(
+                "result",
+                redisJsonValue(DirectRedisConnection.execute(config, database, command)));
+    }
+
+    private boolean isRedisWriteAction(String action) {
+        return new HashSet<>(Arrays.asList(
+                "delete", "set-string", "hset", "hdel", "lset", "rpush",
+                "sadd", "srem", "zadd", "zrem", "expire", "persist")).contains(action);
+    }
+
+    private void assertRedisWriteAllowed(JSONObject config, PluginCall call) {
+        if (config.optBoolean("readOnly", false)) {
+            throw new IllegalArgumentException("此连接已设为只读，不能修改 Redis 数据");
+        }
+        if (!call.getBoolean("confirmedWrite", false)) {
+            throw new IllegalArgumentException("Redis 写入必须由数据浏览器明确确认");
+        }
+        if (config.optBoolean("isProduction", false)
+                && !config.optString("name").equals(call.getString("productionConfirmation", ""))) {
+            throw new IllegalArgumentException("生产连接写入前必须输入完整连接名称");
+        }
+    }
+
+    private JSObject etcdRange(JSONObject config, String prefix, int limit) throws Exception {
+        JSONObject response = DirectEtcdConnection.range(config, prefix, limit);
+        JSArray entries = new JSArray();
+        org.json.JSONArray values = response.optJSONArray("kvs");
+        if (values != null) {
+            for (int index = 0; index < values.length(); index++) {
+                JSONObject item = values.getJSONObject(index);
+                entries.put(etcdEntry(item));
+            }
+        }
+        return new JSObject()
+                .put("entries", entries)
+                .put("count", response.optString("count", String.valueOf(entries.length())))
+                .put("more", response.optBoolean("more", false));
+    }
+
+    private JSObject etcdDetail(JSONObject config, String key) throws Exception {
+        JSONObject response = DirectEtcdConnection.get(config, key);
+        org.json.JSONArray values = response.optJSONArray("kvs");
+        if (values == null || values.length() == 0) {
+            throw new IllegalArgumentException("etcd 键不存在或已被删除");
+        }
+        return etcdEntry(values.getJSONObject(0));
+    }
+
+    private JSObject etcdEntry(JSONObject item) throws Exception {
+        return new JSObject()
+                .put("key", DirectEtcdConnection.decode(item.optString("key")))
+                .put("value", DirectEtcdConnection.decode(item.optString("value")))
+                .put("createRevision", item.optString("create_revision", item.optString("createRevision", "0")))
+                .put("modRevision", item.optString("mod_revision", item.optString("modRevision", "0")))
+                .put("version", item.optString("version", "0"))
+                .put("lease", item.optString("lease", "0"));
+    }
+
+    private void assertEtcdWriteAllowed(JSONObject config, PluginCall call) {
+        if (config.optBoolean("readOnly", false)) {
+            throw new IllegalArgumentException("此连接已设为只读，不能修改 etcd 数据");
+        }
+        if (!call.getBoolean("confirmedWrite", false)) {
+            throw new IllegalArgumentException("etcd 写入必须由数据浏览器明确确认");
+        }
+        if (config.optBoolean("isProduction", false)
+                && !config.optString("name").equals(call.getString("productionConfirmation", ""))) {
+            throw new IllegalArgumentException("生产连接写入前必须输入完整连接名称");
+        }
+    }
+
+    private boolean isMongoWriteAction(String action) {
+        return new HashSet<>(Arrays.asList("insert", "replace", "delete")).contains(action);
+    }
+
+    private void assertMongoWriteAllowed(JSONObject config, PluginCall call) {
+        if (config.optBoolean("readOnly", false)) {
+            throw new IllegalArgumentException("此连接已设为只读，不能修改 MongoDB 文档");
+        }
+        if (!call.getBoolean("confirmedWrite", false)) {
+            throw new IllegalArgumentException("MongoDB 写入必须由数据浏览器明确确认");
+        }
+        if (config.optBoolean("isProduction", false)
+                && !config.optString("name").equals(call.getString("productionConfirmation", ""))) {
+            throw new IllegalArgumentException("生产连接写入前必须输入完整连接名称");
+        }
+    }
+
+    private JSArray stringArray(List<String> values) {
+        JSArray result = new JSArray();
+        for (String value : values) result.put(value);
+        return result;
+    }
+
+    private List<?> requireRedisList(Object value, String command) {
+        if (!(value instanceof List)) {
+            throw new IllegalArgumentException(command + " 返回了意外结果");
+        }
+        return (List<?>) value;
+    }
+
+    private Object redisJsonValue(Object value) {
+        if (value == null) return JSONObject.NULL;
+        if (value instanceof List) {
+            JSArray result = new JSArray();
+            for (Object item : (List<?>) value) result.put(redisJsonValue(item));
+            return result;
+        }
+        return value;
     }
 
     private Object metadata(JSONObject config, String kind, String database, String schema, String table,
@@ -206,7 +624,7 @@ public class DirectDatabasePlugin extends Plugin {
                     }
                     return values;
                 case "schemas":
-                    try (ResultSet rows = meta.getSchemas(databaseOrNull(database), null)) {
+                    try (ResultSet rows = getSchemasCompatible(meta, databaseOrNull(database))) {
                         while (rows.next()) values.put(rows.getString("TABLE_SCHEM"));
                     }
                     return values;
@@ -285,6 +703,17 @@ public class DirectDatabasePlugin extends Plugin {
         }
     }
 
+    static ResultSet getSchemasCompatible(DatabaseMetaData metadata, String catalog) throws SQLException {
+        try {
+            return metadata.getSchemas(catalog, null);
+        } catch (AbstractMethodError error) {
+            // jTDS predates the JDBC 4 catalog-aware overload. The connection
+            // is already opened against the requested SQL Server database, so
+            // its original getSchemas() method returns the correct schemas.
+            return metadata.getSchemas();
+        }
+    }
+
     private JSObject executeQuery(JSONObject config, String database, String schema, String sql,
                                   String executionId, int offset, int pageSize, boolean readOnly) throws Exception {
         long started = System.nanoTime();
@@ -359,8 +788,8 @@ public class DirectDatabasePlugin extends Plugin {
             Class.forName("org.mariadb.jdbc.Driver");
             url = "jdbc:mariadb://" + route.host + ":" + route.port + "/" + database;
         } else if (type.equals("sqlserver")) {
-            Class.forName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
-            url = "jdbc:sqlserver://" + route.host + ":" + route.port + ";databaseName=" + database;
+            Class.forName("net.sourceforge.jtds.jdbc.Driver");
+            url = "jdbc:jtds:sqlserver://" + route.host + ":" + route.port + "/" + database;
         } else {
             route.close();
             throw new IllegalArgumentException("当前 Android 直连版本尚未内置 " + type + " 驱动");
@@ -376,23 +805,11 @@ public class DirectDatabasePlugin extends Plugin {
         } else {
             properties.setProperty("connectTimeout", String.valueOf(connectTimeoutSecs));
         }
-        String sslMode = config.optString("sslMode", "verify-full");
-        if (config.optBoolean("ssl", false)) {
-            if (type.equals("postgres")) properties.setProperty("sslmode", sslMode);
-            if (type.equals("mysql")) {
-                properties.setProperty("sslMode",
-                        sslMode.equals("required") ? "trust"
-                                : sslMode.equals("verify-ca") ? "verify-ca" : "verify-full");
-            }
-            if (type.equals("sqlserver")) {
-                properties.setProperty("encrypt", "true");
-                properties.setProperty("trustServerCertificate", String.valueOf(sslMode.equals("required")));
-            }
-        } else {
-            if (type.equals("postgres")) properties.setProperty("sslmode", "disable");
-            if (type.equals("mysql")) properties.setProperty("sslMode", "disable");
-            if (type.equals("sqlserver")) properties.setProperty("encrypt", "false");
-        }
+        applySecurityProperties(
+                properties,
+                type,
+                config.optBoolean("ssl", false),
+                config.optString("sslMode", "verify-full"));
         DriverManager.setLoginTimeout(Math.max(1, config.optInt("connectTimeoutSecs", 10)));
         try {
             return DirectTransport.attach(DriverManager.getConnection(url, properties), route);
@@ -400,6 +817,33 @@ public class DirectDatabasePlugin extends Plugin {
             route.close();
             if (error instanceof Exception) throw (Exception) error;
             throw (Error) error;
+        }
+    }
+
+    static void applySecurityProperties(Properties properties, String type, boolean ssl, String sslMode) {
+        if (type.equals("sqlserver")) {
+            properties.setProperty(
+                    "ssl",
+                    !ssl ? "off" : sslMode.equals("required") ? "require" : "authenticate");
+            return;
+        }
+        if (ssl) {
+            if (type.equals("postgres")) properties.setProperty("sslmode", sslMode);
+            if (type.equals("mysql")) {
+                properties.setProperty(
+                        "sslMode",
+                        sslMode.equals("required") ? "trust"
+                                : sslMode.equals("verify-ca") ? "verify-ca" : "verify-full");
+            }
+            return;
+        }
+
+        if (type.equals("postgres")) properties.setProperty("sslmode", "disable");
+        if (type.equals("mysql")) {
+            properties.setProperty("sslMode", "disable");
+            // MySQL 8 默认使用 caching_sha2_password。关闭 TLS 后，MariaDB
+            // Connector/J 需要显式允许获取 RSA 公钥，否则会把自签名证书拒绝为认证错误。
+            properties.setProperty("allowPublicKeyRetrieval", "true");
         }
     }
 
@@ -429,7 +873,7 @@ public class DirectDatabasePlugin extends Plugin {
         if (draft.optInt("port") <= 0) throw new IllegalArgumentException("端口必须大于 0");
         String type = draft.optString("dbType");
         if (!SUPPORTED_DATABASES.contains(type)) {
-            throw new IllegalArgumentException("当前直连版本支持 PostgreSQL、MySQL/MariaDB、SQL Server、Redis 和 MongoDB");
+            throw new IllegalArgumentException("当前直连版本支持 PostgreSQL、MySQL/MariaDB、SQL Server、Redis、MongoDB 和 etcd");
         }
         if (type.equals("redis")) {
             String database = optionalDatabase(draft).trim();
@@ -579,6 +1023,13 @@ public class DirectDatabasePlugin extends Plugin {
         if (error instanceof NoClassDefFoundError) {
             return "数据库驱动与当前 Android 运行时不兼容：" + error.getMessage();
         }
-        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        Throwable root = error;
+        while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+        String rootMessage = root.getMessage();
+        if (root != error && rootMessage != null && !rootMessage.isEmpty() && !message.contains(rootMessage)) {
+            return message + "；根因：" + rootMessage;
+        }
+        return message;
     }
 }

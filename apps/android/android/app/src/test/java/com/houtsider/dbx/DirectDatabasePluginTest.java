@@ -9,6 +9,9 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
 
 import org.junit.Test;
 
@@ -51,5 +54,78 @@ public class DirectDatabasePluginTest {
                         new ByteArrayOutputStream(),
                         "PING"));
         assertTrue(error.getMessage().contains("NOAUTH"));
+    }
+
+    @Test
+    public void parsesNestedRedisArraysUsedByScanAndCollections() throws Exception {
+        Object reply = DirectRedisConnection.command(
+                new ByteArrayInputStream(
+                        "*2\r\n$2\r\n17\r\n*2\r\n$8\r\n用户:1\r\n$8\r\n用户:2\r\n"
+                                .getBytes(StandardCharsets.UTF_8)),
+                new ByteArrayOutputStream(),
+                "SCAN",
+                "0");
+
+        List<?> page = (List<?>) reply;
+        assertEquals("17", page.get(0));
+        assertEquals(Arrays.asList("用户:1", "用户:2"), page.get(1));
+    }
+
+    @Test
+    public void parsesNullRedisBulkValues() throws Exception {
+        Object reply = DirectRedisConnection.command(
+                new ByteArrayInputStream("$-1\r\n".getBytes(StandardCharsets.UTF_8)),
+                new ByteArrayOutputStream(),
+                "GET",
+                "missing");
+
+        assertEquals(null, reply);
+    }
+
+    @Test
+    public void allowsMysqlEightAuthenticationWhenSslIsDisabled() {
+        Properties properties = new Properties();
+
+        DirectDatabasePlugin.applySecurityProperties(properties, "mysql", false, "verify-full");
+
+        assertEquals("disable", properties.getProperty("sslMode"));
+        assertEquals("true", properties.getProperty("allowPublicKeyRetrieval"));
+    }
+
+    @Test
+    public void keepsMysqlPublicKeyRetrievalDisabledWhenSslIsEnabled() {
+        Properties properties = new Properties();
+
+        DirectDatabasePlugin.applySecurityProperties(properties, "mysql", true, "required");
+
+        assertEquals("trust", properties.getProperty("sslMode"));
+        assertFalse(properties.containsKey("allowPublicKeyRetrieval"));
+    }
+
+    @Test
+    public void disablesSqlServerSslWhenToggleIsOff() {
+        Properties properties = new Properties();
+
+        DirectDatabasePlugin.applySecurityProperties(properties, "sqlserver", false, "verify-full");
+
+        assertEquals("off", properties.getProperty("ssl"));
+    }
+
+    @Test
+    public void requiresSqlServerEncryptionWithoutCertificateValidation() {
+        Properties properties = new Properties();
+
+        DirectDatabasePlugin.applySecurityProperties(properties, "sqlserver", true, "required");
+
+        assertEquals("require", properties.getProperty("ssl"));
+    }
+
+    @Test
+    public void authenticatesSqlServerCertificateWhenRequested() {
+        Properties properties = new Properties();
+
+        DirectDatabasePlugin.applySecurityProperties(properties, "sqlserver", true, "verify-full");
+
+        assertEquals("authenticate", properties.getProperty("ssl"));
     }
 }
