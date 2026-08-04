@@ -105,6 +105,8 @@ pnpm android:device:test
 
 ## 项目结构
 
+详细代码定位见 [代码地图](docs/CODEMAP.md)。
+
 前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
 
 - `connections.ts`：连接列表、保存、删除和测试。

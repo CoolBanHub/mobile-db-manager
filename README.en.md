@@ -119,6 +119,8 @@ pnpm android:device:test
 
 ## Project Structure
 
+For a detailed feature-to-file index, see [Code Map](docs/CODEMAP.md).
+
 Frontend direct database APIs live in `src/lib/direct/`:
 
 - `connections.ts`: connection list, save, delete, and test.

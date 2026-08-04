@@ -1,6 +1,6 @@
 # Codex 项目要求
 
-本仓库是 `mobile-db-manager`，目标是做一个独立运行的 Android 手机端数据库管理工具。后续开发优先遵守本文件，其次参考 `README.md` 和 `README.en.md`。
+本仓库是 `mobile-db-manager`，目标是做一个独立运行的 Android 手机端数据库管理工具。后续开发优先遵守本文件，其次参考 `docs/CODEMAP.md`、`README.md` 和 `README.en.md`。
 
 ## 产品边界
 
@@ -9,6 +9,8 @@
 - 数据库连接、查询、浏览、编辑能力应以手机端可维护和可调试为前提，不为了快速实现把逻辑堆进单个大文件。
 
 ## 目录职责
+
+开始修改前先看 `docs/CODEMAP.md`，用它定位功能对应的页面、前端 API 和 Android 原生类。
 
 前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
 
