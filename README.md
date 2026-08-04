@@ -2,206 +2,13 @@
 
 [![Android Release APK](https://github.com/CoolBanHub/mobile-db-manager/actions/workflows/android-release.yml/badge.svg)](https://github.com/CoolBanHub/mobile-db-manager/actions/workflows/android-release.yml)
 
-Mobile DB Manager is an Android database manager and mobile SQL client. It connects
-directly from the phone to PostgreSQL, MySQL/MariaDB, SQL Server, Redis, MongoDB,
-and etcd through native Android drivers. No backend service, desktop proxy,
-account system, or mobile API gateway is required.
+语言：中文 | [英文版](README.en.md)
 
-中文：Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端。应用通过
-Android 原生驱动从手机直接连接数据库，不需要部署 Web 服务，也不需要账号会话或
-移动端 API 网关。
+Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端。应用通过 Android
+原生驱动从手机直接连接 PostgreSQL、MySQL/MariaDB、SQL Server、Redis、MongoDB
+和 etcd，不需要部署 Web 服务，也不需要账号会话或移动端 API 网关。
 
-Keywords: Android database manager, mobile database client, Android SQL client,
-mobile SQL editor, PostgreSQL Android client, MySQL Android client, MariaDB
-client, SQL Server Android client, Redis browser, MongoDB mobile client, etcd
-browser, database browser, Capacitor Android app, Vue database tool, JDBC mobile
-client, SSH tunnel, HTTP CONNECT proxy.
-
-## Features
-
-- Create, edit, test, search, favorite, group, and delete database connections on
-  the device.
-- Store database passwords, connection strings, proxy passwords, SSH passwords,
-  and private keys with Android Keystore AES-GCM encryption.
-- Browse metadata, run SQL queries, and edit table data for PostgreSQL,
-  MySQL/MariaDB, and SQL Server.
-- Browse Redis Standalone keys, inspect values, edit supported data types, and
-  manage TTL.
-- Browse MongoDB databases, collections, documents, and edit documents.
-- Browse etcd v3 JSON Gateway prefixes, inspect key details, and write single
-  keys.
-- Use TLS, SSH local port forwarding, and HTTP CONNECT proxy tunnels.
-- Format SQL, use named JSON parameters, autocomplete metadata, cancel queries,
-  store query history, save local SQL snippets, and share exported results.
-
-## Database Support
-
-| Database | Connection Test | Browse / Query | Write |
-| --- | --- | --- | --- |
-| PostgreSQL | Supported | SQL and table data | Supported, primary key required |
-| MySQL / MariaDB | Supported | SQL and table data | Supported, primary key required |
-| SQL Server | Supported | SQL and table data | Supported, primary key required |
-| Redis Standalone | Supported | Key browser | Supported fixed actions |
-| MongoDB | Supported | Collections and documents | Insert, replace, delete |
-| etcd | Supported | Prefixes and key details | put/delete |
-
-Redis Sentinel and Redis Cluster are not supported yet. MongoDB URI already
-contains routing information, so it cannot be combined with the app's SSH or HTTP
-tunnel settings. etcd requires the v3 JSON Gateway.
-
-## Development
-
-Requirements:
-
-- Node.js 22.13 or newer
-- pnpm 10.27.0
-- JDK 21
-- Android SDK 36
-- Android 8.0 (API 26) or newer device/emulator
-
-Install dependencies:
-
-```bash
-pnpm install --frozen-lockfile
-```
-
-Run frontend unit tests:
-
-```bash
-pnpm test
-```
-
-Build WebView assets and sync the Capacitor Android project:
-
-```bash
-pnpm sync
-```
-
-Build Debug APK:
-
-```bash
-pnpm android:build:debug
-```
-
-APK output:
-
-```text
-android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-Open Android Studio:
-
-```bash
-pnpm open
-```
-
-Run Android unit tests:
-
-```bash
-cd android
-./gradlew :app:testDebugUnitTest
-```
-
-Run device instrumentation tests after connecting a device:
-
-```bash
-pnpm android:device:test
-```
-
-## Project Structure
-
-Frontend direct database APIs live in `src/lib/direct/`:
-
-- `connections.ts`: connection list, save, delete, and test.
-- `metadata.ts`: databases, schemas, tables, columns, indexes, and other
-  metadata.
-- `query.ts`: SQL execution, cancellation, and Explain.
-- `tableData.ts`: table browsing and row-level create/update/delete.
-- `redis.ts`, `mongo.ts`, `etcd.ts`: database-specific browser and write actions.
-- `history.ts`, `savedSql.ts`: local query history and saved SQL library.
-- `native.ts`, `localStore.ts`: Capacitor native bridge and localStorage helpers.
-
-Android native direct-connect code lives in
-`android/app/src/main/java/com/coolbanhub/mobiledbmanager/`:
-
-- `DirectDatabasePlugin.java`: Capacitor entry point; parameter reading, safety
-  gates, and dispatch only.
-- `DirectJdbcConnectionFactory.java`: JDBC URL generation, driver loading, SSL,
-  and tunnel routing for PostgreSQL, MySQL/MariaDB, and SQL Server.
-- `DirectJdbcMetadata.java`: JDBC metadata loading.
-- `DirectJdbcQueryRunner.java`: SQL execution, pagination, result serialization,
-  and cancellation.
-- `DirectRedisActions.java`, `DirectMongoActions.java`, `DirectEtcdActions.java`:
-  UI action mapping and write protection.
-- `DirectRedisConnection.java`, `DirectMongoConnection.java`,
-  `DirectEtcdConnection.java`: low-level database clients.
-- `DirectTransport.java`: SSH forwarding and HTTP CONNECT tunnels.
-- `DirectConnectionStore.java`, `SecureVaultStore.java`: connection config and
-  secret storage.
-
-## GitHub Release
-
-Push a `release/v*` tag to trigger GitHub Actions. The workflow builds a Debug APK
-and uploads it to the matching GitHub Release.
-
-```bash
-git tag release/v0.1.0
-git push origin release/v0.1.0
-```
-
-You can also run the `Android Release APK` workflow manually from GitHub Actions
-and provide a tag such as `release/v0.1.0`.
-
-## Release Signing
-
-Set these environment variables before creating a signed release build:
-
-- `MOBILE_DB_MANAGER_ANDROID_KEYSTORE`
-- `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
-- `MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS`
-- `MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD`
-- `MOBILE_DB_MANAGER_ANDROID_VERSION_CODE`
-- `MOBILE_DB_MANAGER_ANDROID_VERSION_NAME`
-
-Then run:
-
-```bash
-pnpm android:release
-```
-
-Release bundle output:
-
-```text
-android/app/build/outputs/bundle/release/app-release.aab
-```
-
-Keystores and passwords must be provided through environment variables and must
-not be committed to the repository.
-
-## Security Notes
-
-- Use WireGuard, Tailscale, or a company VPN for private database networks.
-- Do not expose production database ports directly to the public internet.
-- Use dedicated least-privilege database accounts.
-- Enable production protection for writable production connections.
-- Prefer TLS certificate and hostname verification. Use encryption-only mode only
-  in controlled self-signed environments.
-- Pin the SSH server SHA256 host key fingerprint when using SSH tunnels.
-
-## Android Driver Compatibility
-
-Android does not provide the full Java SE `java.lang.management` and JMX APIs.
-The build script creates Android-compatible driver jars for selected drivers:
-
-- PostgreSQL: replaces result-buffer memory detection.
-- MySQL / MariaDB: removes connection pool JMX registration.
-- MongoDB: removes JMX registration and provides Android-missing SASL contracts.
-
-SQL Server uses jTDS because it is compatible with Android ART.
-
-## 中文说明
-
-### 功能范围
+## 功能范围
 
 - 本机创建、编辑、测试、搜索、收藏、分组和删除数据库连接。
 - 使用 Android Keystore AES-GCM 加密保存数据库密码、连接串、代理密码、SSH
@@ -215,7 +22,7 @@ SQL Server uses jTDS because it is compatible with Android ART.
 - 支持 SQL 格式化、具名 JSON 参数、元数据补全、查询取消、查询历史、本机 SQL
   收藏和结果导出分享。
 
-### 数据库支持
+## 数据库支持
 
 | 数据库 | 连接测试 | 浏览/查询 | 写入 |
 | --- | --- | --- | --- |
@@ -229,7 +36,7 @@ SQL Server uses jTDS because it is compatible with Android ART.
 Redis 当前不支持 Sentinel 和 Cluster。MongoDB URI 已包含完整路由信息，不能同时
 启用应用内 SSH 或 HTTP 隧道。etcd 需要启用 v3 JSON Gateway。
 
-### 开发环境
+## 开发环境
 
 - Node.js 22.13 或更高版本
 - pnpm 10.27.0
@@ -237,7 +44,7 @@ Redis 当前不支持 Sentinel 和 Cluster。MongoDB URI 已包含完整路由�
 - Android SDK 36
 - Android 8.0（API 26）或更高版本的设备或模拟器
 
-### 常用命令
+## 常用命令
 
 安装依赖：
 
@@ -269,6 +76,12 @@ APK 输出位置：
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
+打开 Android Studio：
+
+```bash
+pnpm open
+```
+
 运行 Android 本地单元测试：
 
 ```bash
@@ -276,9 +89,96 @@ cd android
 ./gradlew :app:testDebugUnitTest
 ```
 
-### 代码结构
+连接设备后运行仪器测试：
 
-前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分。Android 原生直连代码在
-`android/app/src/main/java/com/coolbanhub/mobiledbmanager/`。如果新增数据库类型，
-优先新增对应的前端 API 文件、原生 action 文件和底层连接客户端，不要继续把逻辑
-堆到 `DirectDatabasePlugin.java` 里。
+```bash
+pnpm android:device:test
+```
+
+## 项目结构
+
+前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
+
+- `connections.ts`：连接列表、保存、删除和测试。
+- `metadata.ts`：库、schema、表、字段、索引等元数据读取。
+- `query.ts`：SQL 执行、取消、Explain。
+- `tableData.ts`：表格数据浏览和行级增删改。
+- `redis.ts`、`mongo.ts`、`etcd.ts`：各自数据库的数据浏览和固定写入动作。
+- `history.ts`、`savedSql.ts`：本机历史记录和 SQL 收藏。
+- `native.ts`、`localStore.ts`：Capacitor 原生桥接和本机 localStorage 工具。
+
+Android 原生直连代码在
+`android/app/src/main/java/com/coolbanhub/mobiledbmanager/`：
+
+- `DirectDatabasePlugin.java`：Capacitor 入口，只做参数读取、安全门和分发。
+- `DirectJdbcConnectionFactory.java`：PostgreSQL、MySQL/MariaDB、SQL Server
+  的 JDBC URL、驱动加载、SSL 和隧道接入。
+- `DirectJdbcMetadata.java`：JDBC 元数据读取。
+- `DirectJdbcQueryRunner.java`：SQL 执行、分页、结果序列化和取消。
+- `DirectRedisActions.java`、`DirectMongoActions.java`、`DirectEtcdActions.java`：
+  面向界面的动作映射和写入保护。
+- `DirectRedisConnection.java`、`DirectMongoConnection.java`、
+  `DirectEtcdConnection.java`：各数据库的底层连接客户端。
+- `DirectTransport.java`：SSH 转发和 HTTP CONNECT 隧道。
+- `DirectConnectionStore.java`、`SecureVaultStore.java`：连接配置和敏感信息保存。
+
+新增数据库类型时，优先新增对应的前端 API 文件、原生 action 文件和底层连接
+客户端，不要继续把逻辑堆到 `DirectDatabasePlugin.java` 里。
+
+## GitHub Release
+
+推送 `release/v*` 标签会触发 GitHub Actions 构建 Debug APK，并上传到对应的
+GitHub Release。
+
+```bash
+git tag release/v0.1.0
+git push origin release/v0.1.0
+```
+
+也可以在 GitHub Actions 页面手动运行 `Android Release APK` workflow，并填写
+类似 `release/v0.1.0` 的标签。
+
+## 发布签名
+
+发布前设置以下环境变量：
+
+- `MOBILE_DB_MANAGER_ANDROID_KEYSTORE`
+- `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
+- `MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS`
+- `MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD`
+- `MOBILE_DB_MANAGER_ANDROID_VERSION_CODE`
+- `MOBILE_DB_MANAGER_ANDROID_VERSION_NAME`
+
+然后执行：
+
+```bash
+pnpm android:release
+```
+
+发布包输出位置：
+
+```text
+android/app/build/outputs/bundle/release/app-release.aab
+```
+
+密钥库和密码只能通过环境变量提供，不得提交到仓库。
+
+## 安全建议
+
+- 使用 WireGuard、Tailscale 或企业 VPN 接入数据库内网。
+- 不要把生产数据库端口直接暴露到公网。
+- 使用独立的最小权限数据库账号。
+- 为允许写入的生产连接开启生产保护。
+- TLS 优先选择“验证证书和主机名”；“仅加密”只用于受控自签名环境。
+- SSH 连接填写服务器 SHA256 主机密钥指纹。
+
+## Android 驱动兼容层
+
+Android 不包含完整 Java SE 的 `java.lang.management` 和 JMX。构建脚本会为部分
+驱动生成 Android 专用兼容 Jar：
+
+- PostgreSQL：替换结果缓冲区内存检测。
+- MySQL / MariaDB：移除连接池 JMX 注册。
+- MongoDB：移除 JMX 注册，并补充 Android 缺失的 SASL 类型契约。
+
+SQL Server 使用 Android ART 兼容的 jTDS 驱动。
