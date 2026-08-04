@@ -146,7 +146,7 @@ jobs:
       - name: Verify APK signature
         shell: bash
         run: |
-          apksigner verify --verbose --print-certs "release/${{ steps.release.outputs.asset_name }}"
+          "${ANDROID_HOME}/build-tools/36.0.0/apksigner" verify --verbose --print-certs "release/${{ steps.release.outputs.asset_name }}"
 
       - name: Create or update GitHub Release
         env:
