@@ -151,6 +151,9 @@ dependencies {
     }
     implementation androidMongoDriverCoreFiles
     implementation "com.github.mwiede:jsch:2.28.2"
+    // Ed25519/Ed448 public-key SSH auth uses JSch's BouncyCastle-backed
+    // implementation on Android runtimes.
+    implementation "org.bouncycastle:bcprov-jdk18on:1.79"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test:runner:1.7.0"
