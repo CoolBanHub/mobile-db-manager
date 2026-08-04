@@ -9,6 +9,15 @@ directly from the phone to PostgreSQL, MySQL/MariaDB, SQL Server, Redis, MongoDB
 and etcd through native Android drivers. No backend service, desktop proxy,
 account system, or mobile API gateway is required.
 
+## App Preview
+
+These screenshots come from the app running in an Android emulator. The etcd data
+is served by a local Docker test container.
+
+| Connections | etcd keyspace | Key details |
+| --- | --- | --- |
+| <img src="docs/screenshots/connections.png" width="280" alt="Mobile DB Manager connection manager"> | <img src="docs/screenshots/etcd-browser.png" width="280" alt="Mobile DB Manager etcd keyspace browser"> | <img src="docs/screenshots/etcd-key-detail.png" width="280" alt="Mobile DB Manager etcd key details"> |
+
 ## Search Keywords
 
 Android database manager, mobile database client, Android SQL client, mobile SQL

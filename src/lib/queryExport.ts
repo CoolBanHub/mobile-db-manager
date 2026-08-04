@@ -148,7 +148,7 @@ export function queryExportFilename(
 ): string {
   const timestamp = now.toISOString().replace(/\.\d{3}Z$/, "Z").replaceAll(":", "-");
   const extension = format === "markdown" ? "md" : format;
-  return `dbx-${safeFilenameSegment(database)}-${safeFilenameSegment(schema || "default")}-${timestamp}.${extension}`;
+  return `mobile-db-${safeFilenameSegment(database)}-${safeFilenameSegment(schema || "default")}-${timestamp}.${extension}`;
 }
 
 function artifactFor(result: Pick<QueryResult, "columns" | "rows">, format: QueryExportFormat): QueryExportArtifact {

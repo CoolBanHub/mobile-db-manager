@@ -48,7 +48,7 @@ describe("queryResultToCsv", () => {
 describe("queryExportFilename", () => {
   it("uses safe database and schema segments with a stable UTC timestamp", () => {
     expect(queryExportFilename("sales / 华东", "../reporting", new Date("2026-07-29T01:02:03.456Z"))).toBe(
-      "dbx-sales-华东-reporting-2026-07-29T01-02-03Z.csv",
+      "mobile-db-sales-华东-reporting-2026-07-29T01-02-03Z.csv",
     );
   });
 

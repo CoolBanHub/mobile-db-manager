@@ -34,6 +34,7 @@ const redisDataBrowser = ref<BrowseHandler | null>(null);
 const etcdDataBrowser = ref<BackHandler | null>(null);
 const queryWorkbench = ref<BackHandler | null>(null);
 const theme = ref<ColorTheme>("light");
+const pageMotion = ref<"next" | "previous" | "">("");
 // 数据库能力表决定浏览器组件；新增类型时无需在多个导航入口重复判断。
 const queryConnections = computed(() => connections.value.filter((connection) => ["postgres", "mysql", "sqlserver", "redis", "mongodb"].includes(connection.dbType)));
 const browsingMode = computed(() => (browsingConnection.value ? databaseCapability(browsingConnection.value.dbType).browse : null));
@@ -47,7 +48,14 @@ const headerSubtitle = computed(() => {
 });
 let queryDraftNonce = 0;
 let backButtonListener: PluginListenerHandle | null = null;
-const LAST_BROWSE_CONNECTION_KEY = "dbx-last-browse-connection";
+let pageMotionTimer: ReturnType<typeof setTimeout> | null = null;
+let pageSwipeStart: { pointerId: number; x: number; y: number; startedAt: number } | null = null;
+let suppressClickUntil = 0;
+const LAST_BROWSE_CONNECTION_KEY = "mobile-db-last-browse-connection";
+const LEGACY_LAST_BROWSE_CONNECTION_KEY = "dbx-last-browse-connection";
+const COLOR_THEME_KEY = "mobile-db-color-theme";
+const LEGACY_COLOR_THEME_KEY = "dbx-color-theme";
+const PAGE_SWIPE_IGNORED_SELECTOR = "input, textarea, select, [role='dialog'], [role='separator'], .result-scroll, .query-tabs, .object-tabs, .detail-tabs, .schema-switcher";
 
 async function loadConnections() {
   connectionsLoading.value = true;
@@ -86,7 +94,7 @@ function sectionLabel(section: MobileSection) {
 function applyTheme(value: ColorTheme) {
   theme.value = value;
   document.documentElement.dataset.theme = value;
-  localStorage.setItem("dbx-color-theme", value);
+  localStorage.setItem(COLOR_THEME_KEY, value);
   if (Capacitor.isNativePlatform()) {
     void StatusBar.setStyle({ style: value === "dark" ? Style.Light : Style.Dark });
     void StatusBar.setBackgroundColor({ color: value === "dark" ? "#06111d" : "#ffffff" });
@@ -100,7 +108,7 @@ function toggleTheme() {
 function openBrowse() {
   activeSection.value = "connections";
   if (browsingConnection.value) return;
-  const lastConnectionId = localStorage.getItem(LAST_BROWSE_CONNECTION_KEY);
+  const lastConnectionId = localStorage.getItem(LAST_BROWSE_CONNECTION_KEY) ?? localStorage.getItem(LEGACY_LAST_BROWSE_CONNECTION_KEY);
   const lastConnection = connections.value.find((connection) => connection.id === lastConnectionId);
   if (lastConnection) browsingConnection.value = lastConnection;
 }
@@ -116,7 +124,7 @@ function currentBrowseQueryContext(): BrowseQueryContext | null {
 
 function openQueryFromBrowse() {
   if (activeSection.value === "query") return;
-  const lastConnectionId = localStorage.getItem(LAST_BROWSE_CONNECTION_KEY);
+  const lastConnectionId = localStorage.getItem(LAST_BROWSE_CONNECTION_KEY) ?? localStorage.getItem(LEGACY_LAST_BROWSE_CONNECTION_KEY);
   const fallbackConnection = browsingConnection.value ?? connections.value.find((connection) => connection.id === lastConnectionId) ?? null;
   if (!fallbackConnection || !queryConnections.value.some((connection) => connection.id === fallbackConnection.id)) {
     navigateTo("query");
@@ -129,8 +137,73 @@ function openQueryFromBrowse() {
   };
   openQueryDraft({
     ...context,
-    sql: fallbackConnection.dbType === "mongodb" ? "db." : fallbackConnection.dbType === "redis" ? "" : "SELECT 1;",
+    sql: fallbackConnection.dbType === "mongodb" ? "db." : fallbackConnection.dbType === "redis" ? "" : "SELECT 1 AS result;",
   });
+}
+
+function pagePosition() {
+  if (activeSection.value === "query") return 2;
+  return browsingConnection.value ? 1 : 0;
+}
+
+function animatePageMotion(direction: "next" | "previous") {
+  if (pageMotionTimer) clearTimeout(pageMotionTimer);
+  pageMotion.value = "";
+  requestAnimationFrame(() => {
+    pageMotion.value = direction;
+    pageMotionTimer = setTimeout(() => {
+      pageMotion.value = "";
+      pageMotionTimer = null;
+    }, 220);
+  });
+}
+
+function switchPageBySwipe(direction: "next" | "previous") {
+  const before = pagePosition();
+  if (direction === "next") {
+    if (before === 0) openBrowse();
+    else if (before === 1) openQueryFromBrowse();
+  } else if (before === 2) {
+    leaveQuery();
+  } else if (before === 1) {
+    browsingConnection.value = null;
+    activeSection.value = "connections";
+  }
+  if (pagePosition() === before) return;
+  suppressClickUntil = performance.now() + 420;
+  animatePageMotion(direction);
+}
+
+function startPageSwipe(event: PointerEvent) {
+  if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest(PAGE_SWIPE_IGNORED_SELECTOR)) return;
+  pageSwipeStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, startedAt: performance.now() };
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+}
+
+function finishPageSwipe(event: PointerEvent) {
+  const start = pageSwipeStart;
+  pageSwipeStart = null;
+  if (!start || start.pointerId !== event.pointerId) return;
+  const deltaX = event.clientX - start.x;
+  const deltaY = event.clientY - start.y;
+  const distance = Math.abs(deltaX);
+  const duration = Math.max(1, performance.now() - start.startedAt);
+  const velocity = distance / duration;
+  const isHorizontal = distance > Math.abs(deltaY) * 1.3;
+  const passedThreshold = distance >= 56 || (distance >= 34 && velocity >= 0.5);
+  if (duration <= 800 && isHorizontal && passedThreshold) switchPageBySwipe(deltaX < 0 ? "next" : "previous");
+}
+
+function cancelPageSwipe() {
+  pageSwipeStart = null;
+}
+
+function blockClickAfterSwipe(event: MouseEvent) {
+  if (performance.now() >= suppressClickUntil) return;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function focusConnectionSearch() {
@@ -182,7 +255,7 @@ function handleHardwareBack() {
 }
 
 onMounted(async () => {
-  const storedTheme = localStorage.getItem("dbx-color-theme");
+  const storedTheme = localStorage.getItem(COLOR_THEME_KEY) ?? localStorage.getItem(LEGACY_COLOR_THEME_KEY);
   applyTheme(storedTheme === "light" || storedTheme === "dark" ? storedTheme : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   if (Capacitor.isNativePlatform()) {
     backButtonListener = await CapacitorApp.addListener("backButton", handleHardwareBack);
@@ -193,16 +266,17 @@ onMounted(async () => {
 watch(activeSection, () => window.scrollTo({ top: 0, behavior: "smooth" }));
 
 onBeforeUnmount(() => {
+  if (pageMotionTimer) clearTimeout(pageMotionTimer);
   void backButtonListener?.remove();
 });
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" @click.capture="blockClickAfterSwipe" @pointercancel="cancelPageSwipe" @pointerdown="startPageSwipe" @pointerup="finishPageSwipe">
     <div class="ambient-grid" aria-hidden="true"></div>
 
     <main class="workspace-view">
-      <section class="section-stage">
+      <section class="section-stage" :class="pageMotion ? `page-enter-${pageMotion}` : ''">
         <header v-if="activeSection !== 'query'" class="app-header" :class="{ 'home-header': activeSection === 'connections' && !browsingConnection }">
           <button v-if="activeSection === 'connections' && browsingConnection" class="header-back" type="button" aria-label="返回连接列表" @click="browsingConnection = null">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>

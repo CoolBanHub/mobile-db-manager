@@ -8,6 +8,14 @@ Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端�
 原生驱动从手机直接连接 PostgreSQL、MySQL/MariaDB、SQL Server、Redis、MongoDB
 和 etcd，不需要部署 Web 服务，也不需要账号会话或移动端 API 网关。
 
+## 运行效果
+
+以下画面来自 Android 模拟器中的真实运行版本，etcd 数据由本地 Docker 测试容器提供。
+
+| 连接管理 | etcd 键空间 | 键值详情 |
+| --- | --- | --- |
+| <img src="docs/screenshots/connections.png" width="280" alt="Mobile DB Manager 连接管理页面"> | <img src="docs/screenshots/etcd-browser.png" width="280" alt="Mobile DB Manager etcd 键空间浏览页面"> | <img src="docs/screenshots/etcd-key-detail.png" width="280" alt="Mobile DB Manager etcd 键值详情页面"> |
+
 ## 功能范围
 
 - 本机创建、编辑、测试、搜索、收藏、分组和删除数据库连接。

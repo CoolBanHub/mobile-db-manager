@@ -80,6 +80,36 @@ button {
   min-height: 100dvh;
   overflow: hidden;
   padding-top: var(--safe-top);
+  touch-action: pan-y;
+}
+
+.section-stage.page-enter-next {
+  animation: page-enter-next 210ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.section-stage.page-enter-previous {
+  animation: page-enter-previous 210ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes page-enter-next {
+  from {
+    opacity: 0.72;
+    transform: translateX(18px);
+  }
+}
+
+@keyframes page-enter-previous {
+  from {
+    opacity: 0.72;
+    transform: translateX(-18px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section-stage.page-enter-next,
+  .section-stage.page-enter-previous {
+    animation: none;
+  }
 }
 
 .ambient-grid {

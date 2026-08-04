@@ -24,6 +24,7 @@ const hasMore = ref(false);
 const loading = ref(true);
 const busy = ref(false);
 const error = ref("");
+const collectionError = ref("");
 const status = ref("");
 const createOpen = ref(false);
 const createDraft = ref("{\n  \n}");
@@ -54,6 +55,7 @@ function handleBack() {
   if (selectedCollection.value) {
     selectedCollection.value = "";
     documents.value = [];
+    collectionError.value = "";
     return true;
   }
   if (selectedDatabase.value) {
@@ -80,6 +82,7 @@ function showDatabases() {
   selectedDocument.value = "";
   collections.value = [];
   documents.value = [];
+  collectionError.value = "";
   createOpen.value = false;
 }
 
@@ -87,11 +90,21 @@ function showCollections() {
   selectedCollection.value = "";
   selectedDocument.value = "";
   documents.value = [];
+  collectionError.value = "";
   createOpen.value = false;
 }
 
 function message(reason: unknown, fallback: string) {
   return reason instanceof Error ? reason.message : fallback;
+}
+
+function documentLoadMessage(reason: unknown) {
+  const raw = message(reason, "MongoDB 文档加载失败");
+  if (/unauthorized|not authorized|error 13|code.?13/i.test(raw)) {
+    return `当前账号无权读取 ${selectedDatabase.value}.${selectedCollection.value}，请授予 find 权限或选择其他集合。`;
+  }
+  if (raw.length > 180) return "文档读取失败，请检查当前账号权限、筛选条件或连接状态。";
+  return raw;
 }
 
 function prettyJson(source: string) {
@@ -207,6 +220,7 @@ async function openDatabase(name: string) {
     selectedDocument.value = "";
     collections.value = [];
     documents.value = [];
+    collectionError.value = "";
     return;
   }
   loading.value = true;
@@ -215,6 +229,7 @@ async function openDatabase(name: string) {
   selectedDatabase.value = name;
   selectedCollection.value = "";
   selectedDocument.value = "";
+  collectionError.value = "";
   try {
     collections.value = await loadDirectMongoCollections(props.connection.id, name);
   } catch (reason) {
@@ -229,6 +244,7 @@ async function openCollection(name: string) {
     selectedCollection.value = "";
     selectedDocument.value = "";
     documents.value = [];
+    collectionError.value = "";
     return;
   }
   selectedCollection.value = name;
@@ -237,6 +253,9 @@ async function openCollection(name: string) {
   activeFilter.value = "{}";
   filterDraft.value = "{}";
   offset.value = 0;
+  documents.value = [];
+  hasMore.value = false;
+  collectionError.value = "";
   await loadDocuments();
 }
 
@@ -244,14 +263,17 @@ async function loadDocuments() {
   if (!selectedDatabase.value || !selectedCollection.value) return;
   loading.value = true;
   error.value = "";
+  collectionError.value = "";
   status.value = "";
+  documents.value = [];
+  hasMore.value = false;
   try {
     const page = await loadDirectMongoDocuments(props.connection.id, selectedDatabase.value, selectedCollection.value, activeFilter.value, offset.value, limit);
     documents.value = page.documents;
     offset.value = page.offset;
     hasMore.value = page.hasMore;
   } catch (reason) {
-    error.value = message(reason, "MongoDB 文档加载失败");
+    collectionError.value = documentLoadMessage(reason);
   } finally {
     loading.value = false;
   }
@@ -404,6 +426,15 @@ onMounted(loadDatabases);
                 </div>
 
                 <template v-if="selectedCollection === collectionName">
+                  <div v-if="collectionError" class="mongo-collection-warning" role="status">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="5" y="10" width="14" height="10" rx="2" />
+                      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                    </svg>
+                    <span
+                      ><strong>无法读取文档</strong><small>{{ collectionError }}</small></span
+                    >
+                  </div>
                   <button v-for="document in visibleDocuments" :key="documentIdentity(document)" class="mongo-tree-node document" :class="{ selected: selectedDocument === document }" type="button" @click="openDocument(document)">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zM14 3v5h4" /></svg>
                     <span>{{ documentTitle(document) }}</span
@@ -412,7 +443,7 @@ onMounted(loadDatabases);
                   <button v-if="hasMore" class="mongo-tree-node document load" type="button" @click="changePage(1)">
                     <span>…</span><span>加载下一页</span><small>{{ offset + 1 }}—{{ offset + documents.length }}</small>
                   </button>
-                  <div v-if="documents.length === 0 && !loading" class="mongo-tree-empty">没有匹配的文档</div>
+                  <div v-if="documents.length === 0 && !loading && !collectionError" class="mongo-tree-empty">没有匹配的文档</div>
                 </template>
               </template>
             </template>
@@ -679,6 +710,39 @@ onMounted(loadDatabases);
 }
 .mongo-tree-empty.root {
   padding-left: 24px;
+}
+.mongo-collection-warning {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 9px;
+  margin: 3px 7px 5px 82px;
+  border-left: 2px solid var(--amber);
+  border-radius: 0 5px 5px 0;
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  padding: 9px 10px;
+  color: var(--ink);
+}
+.mongo-collection-warning svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: var(--amber);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+.mongo-collection-warning span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.mongo-collection-warning strong {
+  font-size: 9px;
+}
+.mongo-collection-warning small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
 }
 .mongo-inspector {
   border: 1px solid var(--line);

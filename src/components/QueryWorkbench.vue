@@ -27,7 +27,7 @@ const tableSearchResults = ref<TableInfo[]>([]);
 const tableSearch = ref("");
 const columns = ref<ColumnInfo[]>([]);
 const selectedTable = ref<TableInfo | null>(null);
-const queryTabs = ref([{ id: 1, title: "查询 1", sql: "SELECT 1;" }]);
+const queryTabs = ref([{ id: 1, title: "查询 1", sql: "SELECT 1 AS result;" }]);
 const activeQueryTabId = ref(1);
 let nextQueryTabId = 2;
 const sql = computed({
@@ -56,7 +56,8 @@ const loadingSuggestionTables = new Set<string>();
 const runMenuOpen = ref(false);
 const showSavePanel = ref(false);
 const activeResultTab = ref<"result" | "messages" | "plan" | "schema">("result");
-const editorHeight = ref(190);
+// 默认给结果区预留一行表头与数据的空间；仍可通过中间拖拽条扩大编辑器。
+const editorHeight = ref(150);
 const result = ref<QueryResult | null>(null);
 const error = ref("");
 const loadingContext = ref(false);
@@ -123,6 +124,12 @@ const chartRows = computed(() => {
 const tables = computed(() => mergeTableMetadata(browsedTables.value, tableSearchResults.value));
 const visibleTables = computed(() => (tableSearch.value.trim() ? tableSearchResults.value : browsedTables.value));
 const hasMoreTables = computed(() => (tableSearch.value.trim() ? searchResultsHaveMore.value : browsedTablesHaveMore.value));
+const usesTableContextPicker = computed(() => selectedDatabaseType.value === "mysql" || selectedDatabaseType.value === "mongodb");
+const resultStatusText = computed(() => {
+  if (!result.value) return "";
+  if (result.value.columns.length) return `返回 ${result.value.rows.length}${result.value.has_more ? "+" : ""} 行`;
+  return `影响 ${result.value.affected_rows} 行`;
+});
 const suggestionColumns = computed(() => {
   const merged = [...columns.value, ...Object.values(columnsByTable.value).flat()];
   return merged.filter((column, index) => merged.findIndex((item) => item.name === column.name && item.data_type === column.data_type) === index);
@@ -254,7 +261,7 @@ async function selectConnection(preferredDatabase?: string, preferredSchema?: st
   selectedTable.value = null;
   result.value = null;
   if (!requestedConnectionId) return;
-  if (sql.value === "SELECT 1;") {
+  if (sql.value === "SELECT 1;" || sql.value === "SELECT 1 AS result;") {
     sql.value = selectedDatabaseType.value === "redis" ? "" : selectedDatabaseType.value === "mongodb" ? "db." : sql.value;
   }
   loadingContext.value = true;
@@ -460,6 +467,17 @@ async function openTable(table: TableInfo) {
   } finally {
     loadingMetadata.value = false;
   }
+}
+
+function selectContextTable(event: Event) {
+  const name = (event.target as HTMLSelectElement).value;
+  if (!name) {
+    selectedTable.value = null;
+    columns.value = [];
+    return;
+  }
+  const table = tables.value.find((item) => item.name === name);
+  if (table) void openTable(table);
 }
 
 function generateTableQuery(table: TableInfo) {
@@ -993,7 +1011,11 @@ defineExpose({ handleBack });
         <option v-for="item in databases" :key="item.name" :value="item.name">{{ item.name }}</option>
       </select>
       <b>/</b>
-      <select v-model="schema" :disabled="schemas.length === 0" aria-label="Schema" @change="selectSchema">
+      <select v-if="usesTableContextPicker" :value="selectedTable?.name || ''" :disabled="!database || loadingMetadata" aria-label="表或集合" @change="selectContextTable">
+        <option value="">{{ selectedDatabaseType === "mongodb" ? "选择集合" : "选择表" }}</option>
+        <option v-for="item in tables" :key="`${item.parent_schema ?? ''}:${item.name}`" :value="item.name">{{ item.name }}</option>
+      </select>
+      <select v-else v-model="schema" :disabled="schemas.length === 0" aria-label="Schema" @change="selectSchema">
         <option value="">{{ schemaContextLabel }}</option>
         <option v-for="item in schemas" :key="item" :value="item">{{ item }}</option>
       </select>
@@ -1079,7 +1101,7 @@ defineExpose({ handleBack });
     </div>
     <section v-if="activeResultTab === 'messages'" class="message-panel">
       <strong>{{ result ? "执行成功" : executing ? "正在执行查询" : "等待执行" }}</strong>
-      <span v-if="result">影响 {{ result.affected_rows }} 行 · {{ result.execution_time_ms }} ms</span>
+      <span v-if="result">{{ resultStatusText }} · {{ result.execution_time_ms }} ms</span>
       <span v-else>{{ saveStatus || exportStatus || "查询消息将在这里显示" }}</span>
     </section>
     <section v-if="activeResultTab === 'plan' && explainResult" class="explain-panel">
@@ -1123,7 +1145,7 @@ defineExpose({ handleBack });
       <header>
         <div class="result-metrics">
           <strong>✓ 执行成功</strong>
-          <span>影响 {{ result.affected_rows || result.rows.length }} 行 · {{ result.execution_time_ms }} ms</span>
+          <span>{{ resultStatusText }} · {{ result.execution_time_ms }} ms</span>
           <em v-if="result.has_more">MORE</em>
         </div>
         <div v-if="result.columns.length" class="result-actions">
@@ -1189,7 +1211,7 @@ defineExpose({ handleBack });
           </tbody>
         </table>
       </div>
-      <p v-else>执行成功，影响 {{ result.affected_rows }} 行。</p>
+      <p v-else>执行成功，{{ resultStatusText }}。</p>
       <footer v-if="result.columns.length">
         <div>
           <button :disabled="executing || resultOffset === 0" aria-label="第一页" @click="executePage(0)">|‹</button>
