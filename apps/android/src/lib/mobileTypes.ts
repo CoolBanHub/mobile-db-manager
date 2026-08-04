@@ -1,4 +1,5 @@
 export interface MobileConnectionSummary {
+  // 列表与工作台只接收非敏感摘要；用户名和凭据不会出现在该类型中。
   id: string;
   name: string;
   note: string;
@@ -20,7 +21,8 @@ export type MobileDatabaseType =
   | "postgres"
   | "redis"
   | "sqlserver"
-  | "mongodb";
+  | "mongodb"
+  | "etcd";
 
 export interface MobileConnectionDraft {
   id?: string;
@@ -58,6 +60,7 @@ export interface MobileConnectionDraft {
 }
 
 export interface MobileConnectionEditor extends MobileConnectionSummary {
+  // has* 仅表示原生保险箱中已有密文，让编辑页支持“留空即保留”，不会回传秘密本身。
   hasPassword: boolean;
   username: string;
   keepaliveIntervalSecs: number;
@@ -172,6 +175,57 @@ export interface MobileTableDataResponse {
   editBlockReason: string | null;
   connectionName: string;
   isProduction: boolean;
+}
+
+export type RedisKeyType = "string" | "hash" | "list" | "set" | "zset" | "stream" | "none" | string;
+
+export interface MobileRedisOverview {
+  keyCount: number;
+  keyspace: string;
+}
+
+export interface MobileRedisScanPage {
+  cursor: string;
+  keys: string[];
+}
+
+export interface MobileRedisKeyDetail {
+  key: string;
+  type: RedisKeyType;
+  ttlMs: number;
+  memoryBytes: number | null;
+  length?: number;
+  value: unknown;
+}
+
+export interface MobileMongoDocumentPage {
+  // 使用 Extended JSON 字符串保留 ObjectId、日期和高精度数值等 BSON 类型。
+  documents: string[];
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+export interface MobileEtcdOverview {
+  version: string;
+  dbSize: string;
+  keyCount: string;
+}
+
+export interface MobileEtcdEntry {
+  // etcd revision/lease 均可能超过 JS 安全整数范围，因此统一以字符串跨桥接传输。
+  key: string;
+  value: string;
+  createRevision: string;
+  modRevision: string;
+  version: string;
+  lease: string;
+}
+
+export interface MobileEtcdPage {
+  entries: MobileEtcdEntry[];
+  count: string;
+  more: boolean;
 }
 
 export interface MobileQueryDraft {

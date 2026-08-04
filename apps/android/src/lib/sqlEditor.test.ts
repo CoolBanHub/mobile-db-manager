@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ColumnInfo, TableInfo } from "./mobileTypes";
-import {
-  applySqlSuggestion,
-  buildColumnCondition,
-  buildTableSelect,
-  formatSql,
-  mergeTableMetadata,
-  quoteSqlIdentifier,
-  sqlSuggestions,
-} from "./sqlEditor";
+import { applySqlSuggestion, buildColumnCondition, buildTableSelect, formatSql, mergeTableMetadata, quoteSqlIdentifier, sqlSuggestions } from "./sqlEditor";
 
 const tables = [{ name: "users", table_type: "BASE TABLE" }] as TableInfo[];
 const columns = [{ name: "user_id", data_type: "uuid" }] as ColumnInfo[];
@@ -31,9 +23,7 @@ describe("mobile SQL editor helpers", () => {
   });
 
   it("formats major clauses and logical conditions", () => {
-    expect(formatSql("select * from users where active = 1 and id > 4;")).toBe(
-      "select *\nFROM users\nWHERE active = 1\n  AND id > 4;",
-    );
+    expect(formatSql("select * from users where active = 1 and id > 4;")).toBe("select *\nFROM users\nWHERE active = 1\n  AND id > 4;");
   });
 
   it("suggests metadata before keywords and replaces the current token", () => {
@@ -42,6 +32,21 @@ describe("mobile SQL editor helpers", () => {
       kind: "column",
     });
     expect(applySqlSuggestion("SELECT us", 9, "users")).toEqual({ sql: "SELECT users", caret: 12 });
+  });
+
+  it("prioritizes statement keywords and includes DELETE for a leading d", () => {
+    const labels = sqlSuggestions("d", 1, tables, columns, "postgres").map((item) => item.label);
+    expect(labels[0]).toBe("DELETE FROM");
+    expect(labels).toEqual(expect.arrayContaining(["DISTINCT", "DROP TABLE"]));
+  });
+
+  it("uses database-specific Redis and MongoDB completion vocabularies", () => {
+    expect(sqlSuggestions("h", 1, [], [], "redis").map((item) => item.label)).toEqual(["HDEL", "HGET", "HGETALL", "HSET"]);
+    expect(sqlSuggestions("find", 4, [], [], "mongodb").map((item) => item.label)).toEqual(["find", "findOne"]);
+    expect(sqlSuggestions("$m", 2, [], [], "mongodb")[0]).toMatchObject({
+      label: "$match",
+      detail: "MONGODB",
+    });
   });
 
   it("merges later metadata pages and search hits without duplicate completion entries", () => {
@@ -54,10 +59,6 @@ describe("mobile SQL editor helpers", () => {
       { name: "audit_log", table_type: "BASE TABLE", parent_schema: "public" },
     ] as TableInfo[];
 
-    expect(mergeTableMetadata(firstPage, laterPage).map((table) => table.name)).toEqual([
-      "users",
-      "orders",
-      "audit_log",
-    ]);
+    expect(mergeTableMetadata(firstPage, laterPage).map((table) => table.name)).toEqual(["users", "orders", "audit_log"]);
   });
 });

@@ -6,6 +6,13 @@ import type {
   MobileConnectionSummary,
   MobileHistoryEntry,
   MobileHistoryPage,
+  MobileEtcdEntry,
+  MobileEtcdOverview,
+  MobileEtcdPage,
+  MobileMongoDocumentPage,
+  MobileRedisKeyDetail,
+  MobileRedisOverview,
+  MobileRedisScanPage,
   MobileTableDataResponse,
   QueryResult,
   SavedSqlFile,
@@ -25,6 +32,9 @@ interface DirectDatabasePlugin {
   testConnection(options: { connection: MobileConnectionDraft }): Promise<NativeResult<{ message: string }>>;
   metadata(options: Record<string, unknown>): Promise<NativeResult<unknown>>;
   query(options: Record<string, unknown>): Promise<NativeResult<QueryResult>>;
+  redis(options: Record<string, unknown>): Promise<NativeResult<unknown>>;
+  mongo(options: Record<string, unknown>): Promise<NativeResult<unknown>>;
+  etcd(options: Record<string, unknown>): Promise<NativeResult<unknown>>;
   cancel(options: { executionId: string }): Promise<NativeResult<{ cancelled: boolean }>>;
 }
 
@@ -32,6 +42,10 @@ const DirectDatabase = registerPlugin<DirectDatabasePlugin>("DirectDatabase");
 export const DIRECT_HISTORY_KEY = "dbx-mobile.direct.history.v1";
 const SAVED_SQL_KEY = "dbx-mobile.direct.saved-sql.v1";
 
+/**
+ * 原生直连能力只允许在 Android 容器中调用。
+ * 浏览器开发环境没有凭据保险箱和原生驱动，提前失败可避免误把敏感参数交给 Web 实现。
+ */
 function requireNative() {
   if (!Capacitor.isNativePlatform()) {
     throw new DirectApiError("数据库直连只能在 Android App 中运行");
@@ -129,6 +143,7 @@ function historyEntries(): MobileHistoryEntry[] {
 }
 
 function saveHistory(body: Record<string, unknown>, result: QueryResult | null, error: unknown, started: number) {
+  // 翻页查询沿用同一次逻辑执行，只记录第一页，避免历史列表被分页操作淹没。
   if (Number(body.offset ?? 0) !== 0) return;
   const entries = historyEntries();
   const entry: MobileHistoryEntry = {
@@ -154,6 +169,7 @@ export async function executeDirectQuery(
   requireNative();
   const started = Date.now();
   try {
+    // WebView 只传连接 ID 和本次查询参数；账号、密码始终由原生保险箱读取。
     const result = (
       await DirectDatabase.query({
         connectionId: body.connectionId,
@@ -208,6 +224,163 @@ export function saveDirectSavedSql(body: Record<string, unknown>): SavedSqlFile 
 export async function cancelDirectQuery(executionId: string): Promise<void> {
   requireNative();
   await DirectDatabase.cancel({ executionId });
+}
+
+async function directRedis<T>(options: Record<string, unknown>): Promise<T> {
+  requireNative();
+  return (await DirectDatabase.redis(options)).value as T;
+}
+
+// 三类非关系型数据库共用“动作 + 参数”的窄桥接，具体命令白名单由原生层校验。
+export function loadDirectRedisOverview(connectionId: string, database: number): Promise<MobileRedisOverview> {
+  return directRedis<MobileRedisOverview>({
+    connectionId,
+    database: String(database),
+    action: "overview",
+  });
+}
+
+export function scanDirectRedisKeys(
+  connectionId: string,
+  database: number,
+  cursor: string,
+  pattern: string,
+): Promise<MobileRedisScanPage> {
+  return directRedis<MobileRedisScanPage>({
+    connectionId,
+    database: String(database),
+    action: "scan",
+    cursor,
+    pattern,
+    count: 100,
+  });
+}
+
+export function loadDirectRedisKey(
+  connectionId: string,
+  database: number,
+  key: string,
+): Promise<MobileRedisKeyDetail> {
+  return directRedis<MobileRedisKeyDetail>({
+    connectionId,
+    database: String(database),
+    action: "detail",
+    key,
+  });
+}
+
+export function mutateDirectRedis(
+  connectionId: string,
+  database: number,
+  action: string,
+  payload: Record<string, unknown>,
+  productionConfirmation?: string,
+): Promise<{ result: unknown }> {
+  // confirmedWrite 只是用户界面的显式确认；只读和生产环境校验仍在原生层强制执行。
+  return directRedis<{ result: unknown }>({
+    connectionId,
+    database: String(database),
+    action,
+    ...payload,
+    confirmedWrite: true,
+    productionConfirmation: productionConfirmation ?? "",
+  });
+}
+
+async function directMongo<T>(options: Record<string, unknown>): Promise<T> {
+  requireNative();
+  return (await DirectDatabase.mongo(options)).value as T;
+}
+
+export function loadDirectMongoDatabases(connectionId: string): Promise<string[]> {
+  return directMongo<string[]>({ connectionId, action: "databases" });
+}
+
+export function loadDirectMongoCollections(
+  connectionId: string,
+  database: string,
+): Promise<string[]> {
+  return directMongo<string[]>({ connectionId, database, action: "collections" });
+}
+
+export function loadDirectMongoDocuments(
+  connectionId: string,
+  database: string,
+  collection: string,
+  filter: string,
+  offset: number,
+  limit = 25,
+): Promise<MobileMongoDocumentPage> {
+  return directMongo<MobileMongoDocumentPage>({
+    connectionId,
+    database,
+    collection,
+    filter,
+    offset,
+    limit,
+    action: "documents",
+  });
+}
+
+export function mutateDirectMongo(
+  connectionId: string,
+  database: string,
+  collection: string,
+  action: "insert" | "replace" | "delete",
+  payload: Record<string, unknown>,
+  productionConfirmation?: string,
+): Promise<Record<string, unknown>> {
+  // payload 仅包含当前操作需要的文档，连接凭据不会进入 JavaScript 运行时。
+  return directMongo<Record<string, unknown>>({
+    connectionId,
+    database,
+    collection,
+    action,
+    ...payload,
+    confirmedWrite: true,
+    productionConfirmation: productionConfirmation ?? "",
+  });
+}
+
+async function directEtcd<T>(options: Record<string, unknown>): Promise<T> {
+  requireNative();
+  return (await DirectDatabase.etcd(options)).value as T;
+}
+
+export function loadDirectEtcdOverview(connectionId: string): Promise<MobileEtcdOverview> {
+  return directEtcd<MobileEtcdOverview>({ connectionId, action: "overview" });
+}
+
+export function loadDirectEtcdEntries(
+  connectionId: string,
+  prefix: string,
+  limit = 200,
+): Promise<MobileEtcdPage> {
+  return directEtcd<MobileEtcdPage>({ connectionId, action: "list", prefix, limit });
+}
+
+export function loadDirectEtcdEntry(connectionId: string, key: string): Promise<MobileEtcdEntry> {
+  return directEtcd<MobileEtcdEntry>({ connectionId, action: "detail", key });
+}
+
+export function mutateDirectEtcd(
+  connectionId: string,
+  action: "put" | "delete",
+  key: string,
+  value: string,
+  productionConfirmation?: string,
+  lease = "0",
+): Promise<Record<string, unknown>> {
+  // lease 使用字符串传递，避免 JavaScript number 丢失 etcd 的 64 位租约精度。
+  return directEtcd<Record<string, unknown>>({
+    connectionId,
+    action,
+    key,
+    value,
+    lease,
+    confirmedWrite: true,
+    productionConfirmation: productionConfirmation ?? "",
+  });
 }
 
 export async function explainDirectQuery(body: Record<string, unknown>): Promise<string> {
