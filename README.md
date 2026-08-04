@@ -91,6 +91,33 @@ cd android
 pnpm android:device:test
 ```
 
+## 代码结构
+
+前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
+
+- `connections.ts`：连接列表、保存、删除和测试。
+- `metadata.ts`：库、schema、表、字段、索引等元数据读取。
+- `query.ts`：SQL 执行、取消、Explain。
+- `tableData.ts`：表格数据浏览和行级增删改。
+- `redis.ts`、`mongo.ts`、`etcd.ts`：各自数据库的数据浏览和固定写入动作。
+- `history.ts`、`savedSql.ts`：本机历史记录和 SQL 收藏。
+- `native.ts`、`localStore.ts`：Capacitor 原生桥接和本机 localStorage 工具。
+
+Android 原生直连代码在
+`android/app/src/main/java/com/coolbanhub/mobiledbmanager/`：
+
+- `DirectDatabasePlugin.java`：Capacitor 入口，只做参数读取、安全门和分发。
+- `DirectJdbcConnectionFactory.java`：PostgreSQL、MySQL/MariaDB、SQL Server
+  的 JDBC URL、驱动加载、SSL 和隧道接入。
+- `DirectJdbcMetadata.java`：JDBC 元数据读取。
+- `DirectJdbcQueryRunner.java`：SQL 执行、分页、结果序列化和取消。
+- `DirectRedisActions.java`、`DirectMongoActions.java`、`DirectEtcdActions.java`：
+  面向界面的动作映射和写入保护。
+- `DirectRedisConnection.java`、`DirectMongoConnection.java`、
+  `DirectEtcdConnection.java`：各数据库的底层连接客户端。
+- `DirectTransport.java`：SSH 转发和 HTTP CONNECT 隧道。
+- `DirectConnectionStore.java`、`SecureVaultStore.java`：连接配置和敏感信息保存。
+
 ## GitHub Release
 
 推送 `release/v*` 标签会触发 GitHub Actions 构建 Debug APK，并上传到对应的

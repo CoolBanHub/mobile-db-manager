@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { exportQueryResult, type QueryExportFormat } from "../lib/queryExport";
-import { deleteDirectTableRow, insertDirectTableRow, loadDirectTableData, updateDirectTableCell } from "../lib/directDatabase";
+import { deleteDirectTableRow, insertDirectTableRow, loadDirectTableData, updateDirectTableCell } from "../lib/direct/tableData";
 import type { MobileQueryDraft, MobileTableFilter, MobileTableFilterOperator, MobileTableDataResponse, MobileTableSort, MobileTableTarget } from "../lib/mobileTypes";
 
 const props = defineProps<{

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref } from "vue";
-import { deleteDirectConnection, getDirectConnection, saveDirectConnection, testDirectConnection } from "../lib/directDatabase";
+import { deleteDirectConnection, getDirectConnection, saveDirectConnection, testDirectConnection } from "../lib/direct/connections";
 import type { MobileConnectionDraft, MobileConnectionSummary } from "../lib/mobileTypes";
 import { databaseCapability, mobileDatabaseCapabilities } from "../lib/databaseCapabilities";
 import { getConnectionPreference, parseConnectionTags, removeConnectionPreference, saveConnectionPreference, type ConnectionEnvironment } from "../lib/connectionPreferences";

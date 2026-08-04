@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { loadDirectRedisKey, loadDirectRedisOverview, mutateDirectRedis, scanDirectRedisKeys } from "../lib/directDatabase";
+import { loadDirectRedisKey, loadDirectRedisOverview, mutateDirectRedis, scanDirectRedisKeys } from "../lib/direct/redis";
 import type { MobileConnectionSummary, MobileRedisKeyDetail, MobileRedisOverview } from "../lib/mobileTypes";
 
 const props = defineProps<{ connection: MobileConnectionSummary }>();

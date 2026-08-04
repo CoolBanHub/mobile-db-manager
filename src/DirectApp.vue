@@ -11,7 +11,7 @@ import QueryWorkbench from "./components/QueryWorkbench.vue";
 import RedisDataBrowser from "./components/RedisDataBrowser.vue";
 import UnsupportedConnectionBrowser from "./components/UnsupportedConnectionBrowser.vue";
 import { databaseCapability } from "./lib/databaseCapabilities";
-import { listDirectConnections } from "./lib/directDatabase";
+import { listDirectConnections } from "./lib/direct/connections";
 import type { MobileConnectionSummary, MobileQueryDraft } from "./lib/mobileTypes";
 
 type MobileSection = "connections" | "query";

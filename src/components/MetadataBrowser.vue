@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import TableDataBrowser from "./TableDataBrowser.vue";
-import { buildDirectTableTemplate, loadDirectMetadata } from "../lib/directDatabase";
+import { loadDirectMetadata } from "../lib/direct/metadata";
+import { buildDirectTableTemplate } from "../lib/direct/tableData";
 import { type ColumnInfo, type DatabaseInfo, type DatabaseObjectInfo, type ForeignKeyInfo, type IndexInfo, type MobileConnectionSummary, type MobileQueryDraft, type MobileTableTarget, type TableInfo } from "../lib/mobileTypes";
 
 type BrowseLevel = "connections" | "databases" | "schemas" | "tables" | "details" | "data";

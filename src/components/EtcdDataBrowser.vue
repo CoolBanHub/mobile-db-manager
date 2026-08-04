@@ -5,7 +5,7 @@ import {
   loadDirectEtcdEntry,
   loadDirectEtcdOverview,
   mutateDirectEtcd,
-} from "../lib/directDatabase";
+} from "../lib/direct/etcd";
 import type { MobileConnectionSummary, MobileEtcdEntry, MobileEtcdOverview } from "../lib/mobileTypes";
 
 const props = defineProps<{ connection: MobileConnectionSummary }>();

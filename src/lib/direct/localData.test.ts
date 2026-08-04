@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DIRECT_HISTORY_KEY,
+  searchDirectHistory,
+} from "./history";
+import {
   deleteDirectSavedSqlFolder,
   loadDirectSavedSqlLibrary,
   saveDirectSavedSql,
   saveDirectSavedSqlFolder,
-  searchDirectHistory,
-} from "./directDatabase";
+} from "./savedSql";
 
 beforeEach(() => {
   const values = new Map<string, string>();

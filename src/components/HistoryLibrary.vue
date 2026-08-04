@@ -3,14 +3,16 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   clearDirectHistory,
   deleteDirectHistoryEntry,
+  searchDirectHistory,
+} from "../lib/direct/history";
+import {
   deleteDirectSavedSql,
   deleteDirectSavedSqlFolder,
   loadDirectSavedSql,
   loadDirectSavedSqlLibrary,
   saveDirectSavedSql,
   saveDirectSavedSqlFolder,
-  searchDirectHistory,
-} from "../lib/directDatabase";
+} from "../lib/direct/savedSql";
 import type {
   MobileConnectionSummary,
   MobileHistoryCursor,
