@@ -108,6 +108,12 @@ jobs:
       - name: Run web unit tests
         run: pnpm test
 
+      # A clean checkout does not contain Capacitor's generated Cordova bridge files.
+      # Sync before Gradle configuration so Android tests exercise the same native
+      # project structure that is later used to build the signed release APK.
+      - name: Sync Capacitor Android project
+        run: pnpm sync
+
       - name: Run Android unit tests
         working-directory: android
         run: ./gradlew :app:testDebugUnitTest
