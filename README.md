@@ -22,7 +22,7 @@ Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端�
 - 使用 Android Keystore AES-GCM 加密保存数据库密码、连接串、代理密码、SSH
   密码和私钥。
 - 支持 PostgreSQL、MySQL/MariaDB、SQL Server 的元数据浏览、SQL 查询和表数据
-  编辑。
+  编辑，并可视化设计新表的字段、索引、外键、检查约束、选项与注释后预览 SQL。
 - 支持 Redis Standalone 的 Key 浏览、编辑和 TTL 操作。
 - 支持 MongoDB 的数据库、集合、文档浏览和文档编辑。
 - 支持 etcd v3 JSON Gateway 的前缀查询、键值详情和单键写入。

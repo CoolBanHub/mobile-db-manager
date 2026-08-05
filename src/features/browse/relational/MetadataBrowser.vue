@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import CreateTableEditor from "./CreateTableEditor.vue";
 import TableDataBrowser from "./TableDataBrowser.vue";
 import { loadDirectMetadata } from "@/lib/direct/metadata";
 import { buildDirectTableTemplate } from "@/lib/direct/tableData";
@@ -47,6 +48,7 @@ const tableTarget = ref<MobileTableTarget | null>(null);
 const actionTable = ref("");
 const objectSearch = ref("");
 const tableDataBrowser = ref<{ handleBack: () => boolean } | null>(null);
+const createTableOpen = ref(false);
 let retryAction: (() => Promise<void>) | null = null;
 // 详情和“打开查询”各自维护请求版本，返回上级后迟到的响应不会重新打开旧对象。
 let tableActionRequestId = 0;
@@ -366,11 +368,22 @@ function dropSchemaSql() {
   if (selectedSchema.value) openManagementSql(`DROP SCHEMA ${quoteIdentifier(selectedSchema.value)};`);
 }
 
-function createRelationSql(kind: "table" | "view") {
-  const name = window.prompt(kind === "table" ? "新表名称" : "新视图名称");
+function openCreateTable() {
+  if (!selectedConnection.value || !selectedDatabase.value) return;
+  createTableOpen.value = true;
+}
+
+function openCreatedTableSql(sql: string) {
+  // 设计器不绕过查询工作台直接执行 DDL，让现有写入确认和生产保护继续作为唯一安全入口。
+  createTableOpen.value = false;
+  openManagementSql(sql);
+}
+
+function createViewSql() {
+  const name = window.prompt("新视图名称");
   if (!name?.trim()) return;
   const target = qualifiedObject(name.trim());
-  openManagementSql(kind === "table" ? `CREATE TABLE ${target} (\n  id INTEGER PRIMARY KEY\n);` : `CREATE VIEW ${target} AS\nSELECT 1 AS value;`);
+  openManagementSql(`CREATE VIEW ${target} AS\nSELECT 1 AS value;`);
 }
 
 function renameRelationSql(table: TableInfo) {
@@ -519,6 +532,10 @@ function goBack() {
 }
 
 function handleBack() {
+  if (createTableOpen.value) {
+    createTableOpen.value = false;
+    return true;
+  }
   if (tableDataBrowser.value?.handleBack()) return true;
   if (level.value === "connections") return false;
   goBack();
@@ -553,6 +570,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="metadata-browser">
+    <CreateTableEditor
+      v-if="createTableOpen && selectedConnection"
+      :connection="selectedConnection"
+      :database="selectedDatabase"
+      :schema="selectedSchema"
+      @close="createTableOpen = false"
+      @open-query="openCreatedTableSql"
+    />
     <TableDataBrowser v-if="level === 'data' && tableTarget" ref="tableDataBrowser" :target="tableTarget" @back="goBack" @open-query="openGeneratedQuery" />
     <template v-else>
       <div v-if="level === 'details'" class="browser-toolbar">
@@ -635,6 +660,9 @@ onBeforeUnmount(() => {
                   <span>表 ({{ visibleRelationTables.length }})</span>
                 </button>
                 <template v-if="expandedObjectGroups.has('tables')">
+                  <button class="tree-node leaf-node create-table-node" :disabled="selectedConnection?.readOnly" type="button" @click="openCreateTable">
+                    <span class="tree-symbol">＋</span><span>新建表</span><small>{{ selectedConnection?.readOnly ? "只读连接" : "可视化设计" }}</small>
+                  </button>
                   <button v-for="table in visibleRelationTables" :key="`table:${table.name}`" class="tree-node leaf-node" type="button" @click="openTreeTable(table)">
                     <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
                       <rect x="3.5" y="4" width="17" height="16" rx="1.5" />
@@ -725,8 +753,8 @@ onBeforeUnmount(() => {
 
         <div v-else-if="level === 'tables'" class="schema-objects">
           <div class="schema-management-actions">
-            <button type="button" @click="createRelationSql('table')">＋ TABLE</button>
-            <button type="button" @click="createRelationSql('view')">＋ VIEW</button>
+            <button :disabled="selectedConnection?.readOnly" type="button" @click="openCreateTable">＋ TABLE</button>
+            <button type="button" @click="createViewSql">＋ VIEW</button>
             <button type="button" @click="renameSchemaSql">RENAME SCHEMA</button>
             <button class="danger" type="button" @click="dropSchemaSql">DROP SCHEMA SQL</button>
           </div>
@@ -1408,6 +1436,19 @@ onBeforeUnmount(() => {
 }
 .leaf-node {
   padding-left: 58px;
+}
+.create-table-node {
+  color: var(--acid);
+}
+.create-table-node .tree-symbol {
+  border: 1px solid color-mix(in srgb, var(--acid) 30%, var(--line));
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--acid);
+}
+.tree-node:disabled,
+.schema-management-actions button:disabled {
+  opacity: 0.45;
 }
 .schema-node.selected {
   background: var(--accent-soft);

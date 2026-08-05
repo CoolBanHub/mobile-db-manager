@@ -33,7 +33,8 @@ SSH tunnel, HTTP CONNECT proxy.
 - Store database passwords, connection strings, proxy passwords, SSH passwords,
   and private keys with Android Keystore AES-GCM encryption.
 - Browse metadata, run SQL queries, and edit table data for PostgreSQL,
-  MySQL/MariaDB, and SQL Server.
+  MySQL/MariaDB, and SQL Server. Visually design new table columns, indexes,
+  foreign keys, checks, options, and comments before previewing the SQL.
 - Browse Redis Standalone keys, inspect values, edit supported data types, and
   manage TTL.
 - Browse MongoDB databases, collections, documents, and edit documents.
