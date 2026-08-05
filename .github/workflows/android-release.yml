@@ -63,6 +63,16 @@ jobs:
           echo "version_name=${version}" >> "${GITHUB_OUTPUT}"
           echo "version_code=${version_code}" >> "${GITHUB_OUTPUT}"
           echo "asset_name=mobile-db-manager-${safe_tag}.apk" >> "${GITHUB_OUTPUT}"
+          echo "notes_file=docs/releases/v${version}.md" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate release notes
+        shell: bash
+        run: |
+          notes_file="${{ steps.release.outputs.notes_file }}"
+          if [[ ! -s "${notes_file}" ]]; then
+            echo "::error::Release notes are required: ${notes_file}"
+            exit 1
+          fi
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -97,6 +107,10 @@ jobs:
 
       - name: Run web unit tests
         run: pnpm test
+
+      - name: Run Android unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest
 
       - name: Decode Android signing key
         env:
@@ -153,16 +167,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           ASSET_NAME: ${{ steps.release.outputs.asset_name }}
+          NOTES_FILE: ${{ steps.release.outputs.notes_file }}
           PRERELEASE: ${{ steps.release.outputs.prerelease }}
         shell: bash
         run: |
-          notes="Automated Android APK build for ${RELEASE_TAG}."
           asset="release/${ASSET_NAME}"
 
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release upload "${RELEASE_TAG}" "${asset}" --clobber
+            gh release edit "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes-file "${NOTES_FILE}"
           else
-            args=(release create "${RELEASE_TAG}" "${asset}" --title "${RELEASE_TAG}" --notes "${notes}" --target "${GITHUB_SHA}")
+            args=(release create "${RELEASE_TAG}" "${asset}" --title "${RELEASE_TAG}" --notes-file "${NOTES_FILE}" --target "${GITHUB_SHA}")
             if [[ "${PRERELEASE}" == "true" ]]; then
               args+=(--prerelease)
             fi

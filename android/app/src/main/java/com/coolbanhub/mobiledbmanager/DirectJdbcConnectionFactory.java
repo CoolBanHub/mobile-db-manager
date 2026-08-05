@@ -4,6 +4,9 @@ import org.json.JSONObject;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.Properties;
 
 final class DirectJdbcConnectionFactory {
@@ -90,6 +93,21 @@ final class DirectJdbcConnectionFactory {
             // MySQL 8 默认使用 caching_sha2_password。关闭 TLS 后，MariaDB
             // Connector/J 需要显式允许获取 RSA 公钥，否则会把自签名证书拒绝为认证错误。
             properties.setProperty("allowPublicKeyRetrieval", "true");
+        }
+    }
+
+    static boolean isValid(Connection connection, String type, int timeoutSecs) throws SQLException {
+        int timeout = Math.max(1, timeoutSecs);
+        if (!"sqlserver".equals(type)) return connection.isValid(timeout);
+
+        // jTDS 1.3.1 predates JDBC 4's Connection.isValid implementation. Calling
+        // that interface method on Android throws AbstractMethodError even after
+        // the TDS login has succeeded, so validate SQL Server with a harmless query.
+        try (Statement statement = connection.createStatement()) {
+            statement.setQueryTimeout(timeout);
+            try (ResultSet rows = statement.executeQuery("SELECT 1")) {
+                return rows.next() && rows.getInt(1) == 1;
+            }
         }
     }
 }

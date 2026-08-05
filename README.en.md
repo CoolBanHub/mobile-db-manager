@@ -29,9 +29,16 @@ SSH tunnel, HTTP CONNECT proxy.
 ## Features
 
 - Create, edit, test, search, favorite, group, and delete database connections on
-  the device.
-- Store database passwords, connection strings, proxy passwords, SSH passwords,
-  and private keys with Android Keystore AES-GCM encryption.
+  the device. Classify and filter connections with consistent pale-blue
+  Development, Staging, and Production environment labels; new connections
+  default to Development.
+- Pre-save and manage reusable SSH jump-host profiles from Settings. Database
+  connections reference only a profile ID; database passwords, connection
+  strings, proxy passwords, SSH passwords, and private keys are protected with
+  Android Keystore AES-GCM encryption and never returned to the WebView.
+- Open interface density, SSH jump hosts, privacy and security, and About as
+  focused subpages from the Settings index. Android Back returns to the Settings
+  index first, and the app uses a fixed light interface.
 - Browse metadata, run SQL queries, and edit table data for PostgreSQL,
   MySQL/MariaDB, and SQL Server. Visually design new table columns, indexes,
   foreign keys, checks, options, and comments before previewing the SQL.
@@ -127,6 +134,7 @@ For a detailed feature-to-file index, see [Code Map](docs/CODEMAP.md).
 Frontend pages live in `src/features/`:
 
 - `connections/`: connection management.
+- `settings/`: local preferences and reusable SSH profile management.
 - `query/`: SQL workbench, history, and saved SQL.
 - `browse/relational/`: relational metadata and table data browser.
 - `browse/redis/`, `browse/mongo/`, `browse/etcd/`: database-specific browsers.
@@ -135,6 +143,7 @@ Frontend pages live in `src/features/`:
 Frontend direct database APIs live in `src/lib/direct/`:
 
 - `connections.ts`: connection list, save, delete, and test.
+- `sshProfiles.ts`: reusable SSH profile list, save, and delete.
 - `metadata.ts`: databases, schemas, tables, columns, indexes, and other
   metadata.
 - `query.ts`: SQL execution, cancellation, and Explain.
@@ -161,7 +170,8 @@ Android native direct-connect code lives in
 - `DirectRedisConnection.java`, `DirectMongoConnection.java`,
   `DirectEtcdConnection.java`: low-level database clients.
 - `DirectTransport.java`: SSH forwarding and HTTP CONNECT tunnels.
-- `DirectConnectionStore.java`, `SecureVaultStore.java`: connection config and
+- `DirectConnectionStore.java`, `DirectSshProfileStore.java`, and
+  `SecureVaultStore.java`: connection profiles, reusable SSH profiles, and
   secret storage.
 - `AppUpdatePlugin.java`, `AppReleaseUpdateService.java`, `AppUpdateVersion.java`:
   GitHub Release checks, APK downloads, and version comparison.
@@ -174,6 +184,9 @@ file, and low-level connection client. Do not put new database logic back into
 
 Push a `release/v*` tag to trigger GitHub Actions. The workflow builds a signed
 Release APK and uploads it to the matching GitHub Release.
+
+Every version must include `docs/releases/vMAJOR.MINOR.PATCH.md`. The workflow
+validates this file and publishes it as the complete GitHub Release notes.
 
 ```bash
 git tag release/v0.1.0

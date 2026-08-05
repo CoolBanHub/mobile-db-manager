@@ -9,13 +9,35 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Proxy;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.Test;
 
 public class DirectDatabasePluginTest {
+    @Test
+    public void validatesReusableSshPasswordProfiles() {
+        DirectSshProfileStore.validateFields(
+                "开发跳板机", "bastion.example.com", 22, "deploy",
+                "password", "secret", "");
+    }
+
+    @Test
+    public void rejectsReusableSshProfilesWithoutRequiredCredential() {
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> DirectSshProfileStore.validateFields(
+                        "生产跳板机", "bastion.example.com", 22, "deploy",
+                        "private-key", "", ""));
+        assertTrue(error.getMessage().contains("私钥"));
+    }
+
     @Test
     public void acceptsSingleReadOnlyStatements() {
         assertTrue(DirectDatabasePlugin.isReadOnlySql("SELECT * FROM users"));
@@ -127,5 +149,71 @@ public class DirectDatabasePluginTest {
         DirectDatabasePlugin.applySecurityProperties(properties, "sqlserver", true, "verify-full");
 
         assertEquals("authenticate", properties.getProperty("ssl"));
+    }
+
+    @Test
+    public void validatesJtdsSqlServerConnectionsWithAQuery() throws Exception {
+        AtomicBoolean isValidCalled = new AtomicBoolean(false);
+        AtomicBoolean queryCalled = new AtomicBoolean(false);
+        ResultSet rows = (ResultSet) Proxy.newProxyInstance(
+                ResultSet.class.getClassLoader(),
+                new Class<?>[]{ResultSet.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("next")) return true;
+                    if (method.getName().equals("getInt")) return 1;
+                    return null;
+                });
+        Statement statement = (Statement) Proxy.newProxyInstance(
+                Statement.class.getClassLoader(),
+                new Class<?>[]{Statement.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("setQueryTimeout")) {
+                        assertEquals(7, args[0]);
+                        return null;
+                    }
+                    if (method.getName().equals("executeQuery")) {
+                        assertEquals("SELECT 1", args[0]);
+                        queryCalled.set(true);
+                        return rows;
+                    }
+                    return null;
+                });
+        Connection connection = (Connection) Proxy.newProxyInstance(
+                Connection.class.getClassLoader(),
+                new Class<?>[]{Connection.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("isValid")) {
+                        isValidCalled.set(true);
+                        throw new AbstractMethodError();
+                    }
+                    if (method.getName().equals("createStatement")) return statement;
+                    return null;
+                });
+
+        assertTrue(DirectJdbcConnectionFactory.isValid(connection, "sqlserver", 7));
+        assertFalse(isValidCalled.get());
+        assertTrue(queryCalled.get());
+    }
+
+    @Test
+    public void keepsStandardJdbcValidationForPostgres() throws Exception {
+        AtomicBoolean isValidCalled = new AtomicBoolean(false);
+        Connection connection = (Connection) Proxy.newProxyInstance(
+                Connection.class.getClassLoader(),
+                new Class<?>[]{Connection.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("isValid")) {
+                        isValidCalled.set(true);
+                        assertEquals(5, args[0]);
+                        return true;
+                    }
+                    if (method.getName().equals("createStatement")) {
+                        throw new AssertionError("PostgreSQL should use Connection.isValid");
+                    }
+                    return null;
+                });
+
+        assertTrue(DirectJdbcConnectionFactory.isValid(connection, "postgres", 5));
+        assertTrue(isValidCalled.get());
     }
 }

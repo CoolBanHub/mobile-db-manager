@@ -41,6 +41,10 @@
   background: #07131f;
 }
 
+:root[data-density="compact"] {
+  --interface-row-height: 0.88;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -727,12 +731,26 @@ button {
   left: 0;
   display: grid;
   min-height: calc(70px + var(--safe-bottom));
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 91%, transparent);
   box-shadow: 0 -10px 30px rgba(23, 32, 51, 0.06);
   padding: 6px 8px var(--safe-bottom);
   backdrop-filter: blur(20px);
+}
+
+:root[data-density="compact"] .app-header {
+  min-height: 62px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+:root[data-density="compact"] .bottom-nav {
+  min-height: calc(76px + var(--safe-bottom));
+}
+
+:root[data-density="compact"] .bottom-nav button {
+  gap: 2px;
 }
 
 .bottom-nav button {

@@ -10,14 +10,15 @@ import MetadataBrowser from "@/features/browse/relational/MetadataBrowser.vue";
 import RedisDataBrowser from "@/features/browse/redis/RedisDataBrowser.vue";
 import ConnectionManager from "@/features/connections/ConnectionManager.vue";
 import QueryWorkbench from "@/features/query/QueryWorkbench.vue";
+import SettingsPage from "@/features/settings/SettingsPage.vue";
 import UpdateBanner from "@/features/update/UpdateBanner.vue";
 import { checkLatestAppUpdate, downloadLatestAppUpdate, supportsAppUpdate, type AppUpdateInfo } from "@/lib/appUpdate";
 import { databaseCapability } from "@/lib/databaseCapabilities";
 import { listDirectConnections } from "@/lib/direct/connections";
 import type { MobileConnectionSummary, MobileQueryDraft } from "@/lib/mobileTypes";
 
-type MobileSection = "connections" | "query";
-type ColorTheme = "light" | "dark";
+type MobileSection = "connections" | "query" | "settings";
+type InterfaceDensity = "standard" | "compact";
 type UpdateState = "idle" | "checking" | "available" | "current" | "downloading" | "downloaded" | "error";
 type VisibleUpdateState = Exclude<UpdateState, "idle">;
 type BackHandler = { handleBack: () => boolean };
@@ -37,23 +38,24 @@ const mongoDataBrowser = ref<BrowseHandler | null>(null);
 const redisDataBrowser = ref<BrowseHandler | null>(null);
 const etcdDataBrowser = ref<BackHandler | null>(null);
 const queryWorkbench = ref<BackHandler | null>(null);
+const settingsPage = ref<BackHandler | null>(null);
+const density = ref<InterfaceDensity>("compact");
 const canCheckAppUpdate = supportsAppUpdate();
 const updateState = ref<UpdateState>("idle");
 const updateInfo = ref<AppUpdateInfo | null>(null);
 const updateMessage = ref("");
-const theme = ref<ColorTheme>("light");
 const pageMotion = ref<"next" | "previous" | "">("");
 // 数据库能力表决定浏览器组件；新增类型时无需在多个导航入口重复判断。
 const queryConnections = computed(() => connections.value.filter((connection) => ["postgres", "mysql", "sqlserver", "redis", "mongodb"].includes(connection.dbType)));
 const browsingMode = computed(() => (browsingConnection.value ? databaseCapability(browsingConnection.value.dbType).browse : null));
-const visibleUpdateState = computed<VisibleUpdateState | null>(() => (updateState.value === "idle" ? null : updateState.value));
+const visibleUpdateState = computed<VisibleUpdateState | null>(() => updateState.value === "idle" ? null : updateState.value);
 const headerTitle = computed(() => browsingConnection.value?.name || (activeSection.value === "connections" ? "Mobile DB" : sectionLabel(activeSection.value)));
 const headerSubtitle = computed(() => {
   if (browsingConnection.value) {
     const connection = browsingConnection.value;
     return `${connection.host}:${connection.port}`;
   }
-  return activeSection.value === "connections" ? "连接" : "SQL 工作台";
+  return { connections: "连接", query: "SQL 工作台", settings: "本机偏好与安全配置" }[activeSection.value];
 });
 let queryDraftNonce = 0;
 let backButtonListener: PluginListenerHandle | null = null;
@@ -62,8 +64,7 @@ let pageSwipeStart: { pointerId: number; x: number; y: number; startedAt: number
 let suppressClickUntil = 0;
 const LAST_BROWSE_CONNECTION_KEY = "mobile-db-last-browse-connection";
 const LEGACY_LAST_BROWSE_CONNECTION_KEY = "dbx-last-browse-connection";
-const COLOR_THEME_KEY = "mobile-db-color-theme";
-const LEGACY_COLOR_THEME_KEY = "dbx-color-theme";
+const INTERFACE_DENSITY_KEY = "mobile-db-interface-density";
 const UPDATE_DISMISSED_TAG_KEY = "mobile-db-dismissed-update-tag";
 const PAGE_SWIPE_IGNORED_SELECTOR = "input, textarea, select, [role='dialog'], [role='separator'], .result-scroll, .query-tabs, .object-tabs, .detail-tabs, .schema-switcher, .update-banner";
 
@@ -98,21 +99,13 @@ function openQueryDraft(draft: Omit<MobileQueryDraft, "nonce">) {
 }
 
 function sectionLabel(section: MobileSection) {
-  return { connections: "连接", query: "查询" }[section];
+  return { connections: "连接", query: "查询", settings: "设置" }[section];
 }
 
-function applyTheme(value: ColorTheme) {
-  theme.value = value;
-  document.documentElement.dataset.theme = value;
-  localStorage.setItem(COLOR_THEME_KEY, value);
-  if (Capacitor.isNativePlatform()) {
-    void StatusBar.setStyle({ style: value === "dark" ? Style.Light : Style.Dark });
-    void StatusBar.setBackgroundColor({ color: value === "dark" ? "#06111d" : "#ffffff" });
-  }
-}
-
-function toggleTheme() {
-  applyTheme(theme.value === "light" ? "dark" : "light");
+function applyDensity(value: InterfaceDensity) {
+  density.value = value;
+  document.documentElement.dataset.density = value;
+  localStorage.setItem(INTERFACE_DENSITY_KEY, value);
 }
 
 function openBrowse() {
@@ -152,6 +145,7 @@ function openQueryFromBrowse() {
 }
 
 function pagePosition() {
+  if (activeSection.value === "settings") return 3;
   if (activeSection.value === "query") return 2;
   return browsingConnection.value ? 1 : 0;
 }
@@ -173,6 +167,9 @@ function switchPageBySwipe(direction: "next" | "previous") {
   if (direction === "next") {
     if (before === 0) openBrowse();
     else if (before === 1) openQueryFromBrowse();
+    else if (before === 2) navigateTo("settings");
+  } else if (before === 3) {
+    navigateTo("query");
   } else if (before === 2) {
     leaveQuery();
   } else if (before === 1) {
@@ -220,11 +217,7 @@ function focusConnectionSearch() {
   document.querySelector<HTMLInputElement>(".catalog-search input")?.focus();
 }
 
-function handleHeaderMore() {
-  toggleTheme();
-}
-
-function messageFromError(error: unknown) {
+function updateErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "无法连接 GitHub Releases";
 }
 
@@ -246,15 +239,15 @@ async function checkForUpdates(manual = false) {
       updateMessage.value = info.latestTag ? `最新 Release：${info.latestTag}` : "";
     } else {
       updateState.value = "idle";
-      updateMessage.value = "";
     }
   } catch (error) {
+    // 后台自动检查失败不能阻塞数据库工作流；用户手动检查时才展示可重试错误。
     if (!manual) {
       console.warn("Update check failed", error);
       return;
     }
     updateState.value = "error";
-    updateMessage.value = messageFromError(error);
+    updateMessage.value = updateErrorMessage(error);
   }
 }
 
@@ -268,7 +261,7 @@ async function downloadUpdate() {
     updateMessage.value = result.openedExternal ? "已打开下载页面" : `已开始下载：${result.fileName}`;
   } catch (error) {
     updateState.value = "error";
-    updateMessage.value = messageFromError(error);
+    updateMessage.value = updateErrorMessage(error);
   }
 }
 
@@ -295,6 +288,7 @@ function activeContentHandlesBack() {
     return metadataBrowser.value?.handleBack() ?? false;
   }
   if (activeSection.value === "query") return queryWorkbench.value?.handleBack() ?? false;
+  if (activeSection.value === "settings") return settingsPage.value?.handleBack() ?? false;
   return false;
 }
 
@@ -321,8 +315,15 @@ function handleHardwareBack() {
 }
 
 onMounted(async () => {
-  const storedTheme = localStorage.getItem(COLOR_THEME_KEY) ?? localStorage.getItem(LEGACY_COLOR_THEME_KEY);
-  applyTheme(storedTheme === "light" || storedTheme === "dark" ? storedTheme : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  delete document.documentElement.dataset.theme;
+  localStorage.removeItem("mobile-db-color-theme");
+  localStorage.removeItem("dbx-color-theme");
+  if (Capacitor.isNativePlatform()) {
+    void StatusBar.setStyle({ style: Style.Dark });
+    void StatusBar.setBackgroundColor({ color: "#ffffff" });
+  }
+  const storedDensity = localStorage.getItem(INTERFACE_DENSITY_KEY);
+  applyDensity(storedDensity === "standard" ? "standard" : "compact");
   if (Capacitor.isNativePlatform()) {
     backButtonListener = await CapacitorApp.addListener("backButton", handleHardwareBack);
   }
@@ -344,7 +345,7 @@ onBeforeUnmount(() => {
 
     <main class="workspace-view">
       <section class="section-stage" :class="pageMotion ? `page-enter-${pageMotion}` : ''">
-        <header v-if="activeSection !== 'query'" class="app-header" :class="{ 'home-header': activeSection === 'connections' && !browsingConnection }">
+        <header v-if="activeSection !== 'query' && activeSection !== 'settings'" class="app-header" :class="{ 'home-header': activeSection === 'connections' && !browsingConnection }">
           <button v-if="activeSection === 'connections' && browsingConnection" class="header-back" type="button" aria-label="返回连接列表" @click="browsingConnection = null">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
           </button>
@@ -364,23 +365,6 @@ onBeforeUnmount(() => {
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <circle cx="11" cy="11" r="6" />
               <path d="m16 16 4 4" />
-            </svg>
-          </button>
-          <button v-if="canCheckAppUpdate" class="header-action update-action" :class="{ pending: updateInfo?.hasUpdate }" type="button" aria-label="检查更新" title="检查更新" @click="checkForUpdates(true)">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3v11" />
-              <path d="m7 10 5 5 5-5" />
-              <path d="M5 20h14" />
-            </svg>
-            <i v-if="updateInfo?.hasUpdate" aria-hidden="true"></i>
-          </button>
-          <button class="theme-toggle" type="button" :aria-label="theme === 'light' ? '切换深色模式' : '切换浅色模式'" :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'" @click="handleHeaderMore">
-            <svg v-if="theme === 'dark'" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M20.4 15.2A8.2 8.2 0 0 1 8.8 3.6 8.5 8.5 0 1 0 20.4 15.2Z" />
-            </svg>
-            <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
             </svg>
           </button>
         </header>
@@ -406,7 +390,14 @@ onBeforeUnmount(() => {
           </template>
         </div>
 
-        <QueryWorkbench v-else-if="activeSection === 'query'" ref="queryWorkbench" :connections="queryConnections" :draft="queryDraft" @back="leaveQuery" @draft-consumed="queryDraft = null" @more="handleHeaderMore" />
+        <QueryWorkbench v-else-if="activeSection === 'query'" ref="queryWorkbench" :connections="queryConnections" :draft="queryDraft" @back="leaveQuery" @draft-consumed="queryDraft = null" />
+        <SettingsPage
+          v-else-if="activeSection === 'settings'"
+          ref="settingsPage"
+          :density="density"
+          @set-density="applyDensity"
+          @check-update="checkForUpdates(true)"
+        />
       </section>
     </main>
 
@@ -435,6 +426,13 @@ onBeforeUnmount(() => {
       <button :class="{ active: activeSection === 'query' }" type="button" @click="openQueryFromBrowse">
         <svg class="nav-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 4 5-4 5M13 18h6" /></svg>
         <span>查询</span>
+      </button>
+      <button :class="{ active: activeSection === 'settings' }" type="button" @click="navigateTo('settings')">
+        <svg class="nav-symbol" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
+        </svg>
+        <span>设置</span>
       </button>
     </nav>
   </div>

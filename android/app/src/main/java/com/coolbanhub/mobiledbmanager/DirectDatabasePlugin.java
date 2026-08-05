@@ -24,6 +24,48 @@ public class DirectDatabasePlugin extends Plugin {
         return new DirectConnectionStore(getContext());
     }
 
+    private DirectSshProfileStore sshProfiles() {
+        return new DirectSshProfileStore(getContext());
+    }
+
+    @PluginMethod
+    public void listSshProfiles(PluginCall call) {
+        run(call, () -> {
+            JSArray result = new JSArray();
+            for (JSONObject profile : sshProfiles().all()) result.put(DirectSshProfileStore.summary(profile));
+            return result;
+        });
+    }
+
+    @PluginMethod
+    public void getSshProfile(PluginCall call) {
+        run(call, () -> {
+            JSONObject profile = sshProfiles().get(DirectJson.required(call.getString("id"), "id"));
+            if (profile == null) throw new IllegalArgumentException("SSH 配置不存在");
+            return DirectSshProfileStore.summary(profile);
+        });
+    }
+
+    @PluginMethod
+    public void saveSshProfile(PluginCall call) {
+        run(call, () -> DirectSshProfileStore.summary(
+                sshProfiles().save(DirectJson.requiredObject(call, "profile"))));
+    }
+
+    @PluginMethod
+    public void deleteSshProfile(PluginCall call) {
+        run(call, () -> {
+            String id = DirectJson.required(call.getString("id"), "id");
+            for (JSONObject connection : store().all()) {
+                if (id.equals(connection.optString("sshProfileId"))) {
+                    throw new IllegalArgumentException("该 SSH 配置正被连接“" + connection.optString("name") + "”使用");
+                }
+            }
+            if (!sshProfiles().remove(id)) throw new IllegalArgumentException("SSH 配置不存在");
+            return new JSObject().put("ok", true);
+        });
+    }
+
     @PluginMethod
     public void listConnections(PluginCall call) {
         run(call, () -> {
@@ -47,6 +89,7 @@ public class DirectDatabasePlugin extends Plugin {
             result.put("proxyUsername", config.optString("proxyUsername"));
             result.put("hasProxyPassword", !config.optString("proxyPassword").isEmpty());
             result.put("sshEnabled", config.optBoolean("sshEnabled", false));
+            result.put("sshProfileId", config.optString("sshProfileId"));
             result.put("sshHost", config.optString("sshHost"));
             result.put("sshPort", config.optInt("sshPort", 22));
             result.put("sshUsername", config.optString("sshUsername"));
@@ -68,7 +111,7 @@ public class DirectDatabasePlugin extends Plugin {
     public void saveConnection(PluginCall call) {
         run(call, () -> {
             JSONObject draft = DirectJson.requiredObject(call, "connection");
-            DirectConnectionValidator.validateDraft(withStoredSecrets(draft));
+            DirectConnectionValidator.validateDraft(effectiveConnection(draft));
             return DirectConnectionValidator.summary(store().save(draft));
         });
     }
@@ -87,7 +130,7 @@ public class DirectDatabasePlugin extends Plugin {
     public void testConnection(PluginCall call) {
         run(call, () -> {
             JSONObject draft = DirectJson.requiredObject(call, "connection");
-            JSONObject effective = withStoredSecrets(draft);
+            JSONObject effective = effectiveConnection(draft);
             DirectConnectionValidator.validateDraft(effective);
             String type = effective.optString("dbType");
             if (type.equals("redis")) {
@@ -103,7 +146,10 @@ public class DirectDatabasePlugin extends Plugin {
                 return new JSObject().put("message", "手机已直接连接 etcd");
             }
             try (Connection connection = DirectJdbcConnectionFactory.open(effective, DirectJson.optionalDatabase(effective))) {
-                if (!connection.isValid(Math.max(1, effective.optInt("connectTimeoutSecs", 10)))) {
+                if (!DirectJdbcConnectionFactory.isValid(
+                        connection,
+                        type,
+                        effective.optInt("connectTimeoutSecs", 10))) {
                     throw new SQLException("数据库没有通过连接有效性检查");
                 }
                 return new JSObject().put("message", "手机已直接连接数据库");
@@ -212,7 +258,11 @@ public class DirectDatabasePlugin extends Plugin {
     private JSONObject requiredConfig(String id) throws Exception {
         JSONObject config = store().get(DirectJson.required(id, "connectionId"));
         if (config == null) throw new IllegalArgumentException("连接不存在");
-        return config;
+        return sshProfiles().applyToConnection(config);
+    }
+
+    private JSONObject effectiveConnection(JSONObject incoming) throws Exception {
+        return sshProfiles().applyToConnection(withStoredSecrets(incoming));
     }
 
     private JSONObject withStoredSecrets(JSONObject incoming) throws Exception {

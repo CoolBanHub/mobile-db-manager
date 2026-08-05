@@ -68,6 +68,7 @@ final class DirectConnectionStore {
             }
         }
         merged.put("id", id);
+        stripInlineSshFieldsWhenProfileSelected(merged);
         vault.put(VAULT_PREFIX + id, merged.toString());
         Set<String> ids = new LinkedHashSet<>(preferences().getStringSet(IDS, Collections.emptySet()));
         ids.add(id);
@@ -92,5 +93,16 @@ final class DirectConnectionStore {
                 || name.equals("sshPrivateKey")
                 || name.equals("sshPrivateKeyPassphrase")
                 || name.equals("connectionString");
+    }
+
+    private static void stripInlineSshFieldsWhenProfileSelected(JSONObject connection) {
+        if (connection.optString("sshProfileId", "").trim().isEmpty()) return;
+        // 可复用配置是 SSH 参数的唯一来源。清理连接中可能由旧版手动配置遗留的字段，
+        // 避免同一凭据在两个加密记录中重复保存，也防止后续维护时出现来源歧义。
+        for (String name : new String[]{
+                "sshHost", "sshPort", "sshUsername", "sshHostKeyFingerprint",
+                "sshPassword", "sshAuthMethod", "sshPrivateKey", "sshPrivateKeyPassphrase"}) {
+            connection.remove(name);
+        }
     }
 }

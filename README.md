@@ -18,9 +18,13 @@ Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端�
 
 ## 功能范围
 
-- 本机创建、编辑、测试、搜索、收藏、分组和删除数据库连接。
-- 使用 Android Keystore AES-GCM 加密保存数据库密码、连接串、代理密码、SSH
-  密码和私钥。
+- 本机创建、编辑、测试、搜索、收藏、分组和删除数据库连接，并使用统一淡蓝色的
+  开发、预发、生产环境标签分类和筛选连接；新连接默认使用开发标签。
+- 设置页可提前保存和维护可复用的 SSH 跳板机配置，数据库连接只引用配置 ID；
+  数据库密码、连接串、代理密码、SSH 密码和私钥均使用 Android Keystore
+  AES-GCM 加密保存，敏感内容不会返回 WebView。
+- 设置首页按界面密度、SSH 跳板机、隐私与安全、关于分成独立子页面，Android
+  返回键会先返回设置首页；应用固定使用浅色界面。
 - 支持 PostgreSQL、MySQL/MariaDB、SQL Server 的元数据浏览、SQL 查询和表数据
   编辑，并可视化设计新表的字段、索引、外键、检查约束、选项与注释后预览 SQL。
 - 支持 Redis Standalone 的 Key 浏览、编辑和 TTL 操作。
@@ -111,6 +115,7 @@ pnpm android:device:test
 前端页面放在 `src/features/`：
 
 - `connections/`：连接管理。
+- `settings/`：本机设置和可复用 SSH 配置管理。
 - `query/`：SQL 工作台、历史和收藏。
 - `browse/relational/`：关系型数据库元数据和表数据浏览。
 - `browse/redis/`、`browse/mongo/`、`browse/etcd/`：各自数据库的数据浏览器。
@@ -119,6 +124,7 @@ pnpm android:device:test
 前端直连数据库 API 放在 `src/lib/direct/`，按职责拆分：
 
 - `connections.ts`：连接列表、保存、删除和测试。
+- `sshProfiles.ts`：可复用 SSH 配置的列表、保存和删除。
 - `metadata.ts`：库、schema、表、字段、索引等元数据读取。
 - `query.ts`：SQL 执行、取消、Explain。
 - `tableData.ts`：表格数据浏览和行级增删改。
@@ -142,7 +148,8 @@ Android 原生直连代码在
 - `DirectRedisConnection.java`、`DirectMongoConnection.java`、
   `DirectEtcdConnection.java`：各数据库的底层连接客户端。
 - `DirectTransport.java`：SSH 转发和 HTTP CONNECT 隧道。
-- `DirectConnectionStore.java`、`SecureVaultStore.java`：连接配置和敏感信息保存。
+- `DirectConnectionStore.java`、`DirectSshProfileStore.java`、`SecureVaultStore.java`：
+  连接配置、可复用 SSH 配置和敏感信息保存。
 - `AppUpdatePlugin.java`、`AppReleaseUpdateService.java`、`AppUpdateVersion.java`：
   GitHub Release 检查、APK 下载和版本比较。
 
@@ -153,6 +160,9 @@ Android 原生直连代码在
 
 推送 `release/v*` 标签会触发 GitHub Actions 构建已签名 Release APK，并上传到
 对应的 GitHub Release。
+
+每个版本必须提供 `docs/releases/vMAJOR.MINOR.PATCH.md` 发布说明；workflow 会校验
+文件存在，并将其作为 GitHub Release 的完整说明。
 
 ```bash
 git tag release/v0.1.0

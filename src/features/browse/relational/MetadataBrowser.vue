@@ -613,7 +613,6 @@ onBeforeUnmount(() => {
       <template v-else>
         <div v-if="level === 'connections'" class="browser-list">
           <button v-for="connection in connections" :key="connection.id" class="browser-row connection" type="button" @click="openConnection(connection)">
-            <i :style="{ background: connection.color || 'var(--acid)' }"></i>
             <span>
               <small>{{ connection.dbType }}<em v-if="connection.isProduction">PROD</em></small>
               <strong>{{ connection.name }}</strong>
@@ -1042,12 +1041,8 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 .browser-row.connection {
-  grid-template-columns: 3px minmax(0, 1fr) 16px;
-  gap: 14px;
-}
-.browser-row.connection > i {
-  width: 3px;
-  height: 48px;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 11px;
 }
 .browser-row > span:not(.object-icon) {
   min-width: 0;

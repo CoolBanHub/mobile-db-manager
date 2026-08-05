@@ -1,0 +1,159 @@
+package com.coolbanhub.mobiledbmanager;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+import com.getcapacitor.JSObject;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+/** Stores reusable SSH jump-host profiles without exposing credentials to WebView. */
+final class DirectSshProfileStore {
+    private static final String PREFERENCES = "dbx_direct_ssh_profiles";
+    private static final String IDS = "profile_ids";
+    private static final String VAULT_PREFIX = "direct.ssh.profile.";
+
+    private final Context context;
+    private final SecureVaultStore vault;
+
+    DirectSshProfileStore(Context context) {
+        this.context = context.getApplicationContext();
+        this.vault = new SecureVaultStore(this.context);
+    }
+
+    private SharedPreferences preferences() {
+        return context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
+    }
+
+    List<JSONObject> all() throws Exception {
+        List<JSONObject> values = new ArrayList<>();
+        for (String id : preferences().getStringSet(IDS, Collections.emptySet())) {
+            JSONObject value = get(id);
+            if (value != null) values.add(value);
+        }
+        values.sort((left, right) -> left.optString("name").compareToIgnoreCase(right.optString("name")));
+        return values;
+    }
+
+    JSONObject get(String id) throws Exception {
+        String raw = vault.get(VAULT_PREFIX + id);
+        return raw == null ? null : new JSONObject(raw);
+    }
+
+    JSONObject save(JSONObject incoming) throws Exception {
+        String id = incoming.optString("id", "").trim();
+        if (id.isEmpty()) id = UUID.randomUUID().toString();
+        JSONObject existing = get(id);
+        JSONObject merged = existing == null ? new JSONObject() : new JSONObject(existing.toString());
+        JSONArray names = incoming.names();
+        if (names != null) {
+            for (int index = 0; index < names.length(); index++) {
+                String name = names.getString(index);
+                Object value = incoming.get(name);
+                if (isSecret(name) && value instanceof String && ((String) value).isEmpty() && existing != null) continue;
+                merged.put(name, value);
+            }
+        }
+        merged.put("id", id);
+        validate(merged);
+        // 切换认证方式时主动清理不再使用的凭据。空字符串通常表示“沿用旧值”，
+        // 因此必须在合并完成后清理，避免保险箱长期保留无用途的旧密码或私钥。
+        if ("password".equals(merged.optString("authMethod"))) {
+            merged.remove("privateKey");
+            merged.remove("privateKeyPassphrase");
+        } else {
+            merged.remove("password");
+        }
+        vault.put(VAULT_PREFIX + id, merged.toString());
+        Set<String> ids = new LinkedHashSet<>(preferences().getStringSet(IDS, Collections.emptySet()));
+        ids.add(id);
+        if (!preferences().edit().putStringSet(IDS, ids).commit()) {
+            throw new IllegalStateException("无法更新 SSH 配置索引");
+        }
+        return merged;
+    }
+
+    boolean remove(String id) {
+        Set<String> ids = new LinkedHashSet<>(preferences().getStringSet(IDS, Collections.emptySet()));
+        boolean existed = ids.remove(id);
+        vault.remove(VAULT_PREFIX + id);
+        preferences().edit().putStringSet(IDS, ids).commit();
+        return existed;
+    }
+
+    JSONObject applyToConnection(JSONObject connection) throws Exception {
+        String id = connection.optString("sshProfileId", "").trim();
+        if (id.isEmpty() || !connection.optBoolean("sshEnabled", false)) return connection;
+        JSONObject profile = get(id);
+        if (profile == null) throw new IllegalArgumentException("已保存的 SSH 配置不存在，请在设置中重新选择");
+        // 只在原生调用栈中构造一次性有效配置，保存的数据库连接仍只包含 profile ID，
+        // SSH 密码和私钥不会复制进连接记录，也不会通过 Capacitor 返回 WebView。
+        JSONObject effective = new JSONObject(connection.toString());
+        effective.put("sshEnabled", true);
+        effective.put("sshHost", profile.optString("host"));
+        effective.put("sshPort", profile.optInt("port", 22));
+        effective.put("sshUsername", profile.optString("username"));
+        effective.put("sshHostKeyFingerprint", profile.optString("hostKeyFingerprint"));
+        effective.put("sshAuthMethod", profile.optString("authMethod", "password"));
+        effective.put("sshPassword", profile.optString("password"));
+        effective.put("sshPrivateKey", profile.optString("privateKey"));
+        effective.put("sshPrivateKeyPassphrase", profile.optString("privateKeyPassphrase"));
+        return effective;
+    }
+
+    static JSObject summary(JSONObject profile) {
+        return new JSObject()
+                .put("id", profile.optString("id"))
+                .put("name", profile.optString("name"))
+                .put("host", profile.optString("host"))
+                .put("port", profile.optInt("port", 22))
+                .put("username", profile.optString("username"))
+                .put("hostKeyFingerprint", profile.optString("hostKeyFingerprint"))
+                .put("authMethod", profile.optString("authMethod", "password"))
+                .put("hasPassword", !profile.optString("password").isEmpty())
+                .put("hasPrivateKey", !profile.optString("privateKey").isEmpty())
+                .put("hasPrivateKeyPassphrase", !profile.optString("privateKeyPassphrase").isEmpty());
+    }
+
+    static void validate(JSONObject profile) {
+        validateFields(
+                profile.optString("name"),
+                profile.optString("host"),
+                profile.optInt("port", 22),
+                profile.optString("username"),
+                profile.optString("authMethod", "password"),
+                profile.optString("password"),
+                profile.optString("privateKey"));
+    }
+
+    static void validateFields(String name, String host, int port, String username,
+                               String method, String password, String privateKey) {
+        DirectJson.required(name, "SSH 配置名称");
+        DirectJson.required(host, "SSH 主机");
+        DirectJson.required(username, "SSH 用户名");
+        if (port <= 0 || port > 65535) {
+            throw new IllegalArgumentException("SSH 端口必须在 1 到 65535 之间");
+        }
+        if (!method.equals("password") && !method.equals("private-key")) {
+            throw new IllegalArgumentException("不支持的 SSH 认证方式");
+        }
+        if (method.equals("password") && password.isEmpty()) {
+            throw new IllegalArgumentException("密码认证需要填写 SSH 密码");
+        }
+        if (method.equals("private-key") && privateKey.isEmpty()) {
+            throw new IllegalArgumentException("私钥认证需要填写 OpenSSH 或 PEM 私钥");
+        }
+    }
+
+    private static boolean isSecret(String name) {
+        return name.equals("password") || name.equals("privateKey") || name.equals("privateKeyPassphrase");
+    }
+}

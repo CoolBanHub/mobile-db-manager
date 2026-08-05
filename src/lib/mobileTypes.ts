@@ -48,6 +48,7 @@ export interface MobileConnectionDraft {
   proxyUsername: string;
   proxyPassword: string;
   sshEnabled: boolean;
+  sshProfileId: string;
   sshHost: string;
   sshPort: number;
   sshUsername: string;
@@ -70,6 +71,7 @@ export interface MobileConnectionEditor extends MobileConnectionSummary {
   proxyUsername: string;
   hasProxyPassword: boolean;
   sshEnabled: boolean;
+  sshProfileId: string;
   sshHost: string;
   sshPort: number;
   sshUsername: string;
@@ -81,6 +83,34 @@ export interface MobileConnectionEditor extends MobileConnectionSummary {
   connectionString: string;
   hasConnectionString: boolean;
   tunnelLayerCount: number;
+}
+
+export interface MobileSshProfileSummary {
+  // 原生侧只返回 has* 状态，已保存的凭据本身不得进入 WebView。
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  hostKeyFingerprint: string;
+  authMethod: "password" | "private-key";
+  hasPassword: boolean;
+  hasPrivateKey: boolean;
+  hasPrivateKeyPassphrase: boolean;
+}
+
+export interface MobileSshProfileDraft {
+  // 秘密字段仅承载用户本次输入；编辑已有配置时传空字符串表示保留原密文。
+  id?: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  hostKeyFingerprint: string;
+  authMethod: "password" | "private-key";
+  password: string;
+  privateKey: string;
+  privateKeyPassphrase: string;
 }
 
 export interface DatabaseInfo {

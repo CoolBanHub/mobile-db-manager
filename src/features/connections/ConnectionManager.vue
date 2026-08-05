@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import postgresIcon from "@/assets/database-icons/postgres.svg";
 import redisIcon from "@/assets/database-icons/redis.svg";
 import mongodbIcon from "@/assets/database-icons/mongodb.svg";
 import sqlserverIcon from "@/assets/database-icons/sqlserver.svg";
 import etcdIcon from "@/assets/database-icons/etcd.svg";
-import { getConnectionPreference, parseConnectionTags, removeConnectionPreference, saveConnectionPreference, type ConnectionEnvironment } from "@/lib/connectionPreferences";
+import { getConnectionPreference, removeConnectionPreference, saveConnectionPreference, type ConnectionEnvironment } from "@/lib/connectionPreferences";
 import { databaseCapability, mobileDatabaseCapabilities } from "@/lib/databaseCapabilities";
 import { deleteDirectConnection, getDirectConnection, saveDirectConnection, testDirectConnection } from "@/lib/direct/connections";
-import type { MobileConnectionDraft, MobileConnectionSummary } from "@/lib/mobileTypes";
+import { listSshProfiles } from "@/lib/direct/sshProfiles";
+import type { MobileConnectionDraft, MobileConnectionSummary, MobileSshProfileSummary } from "@/lib/mobileTypes";
 
 const props = defineProps<{ connections: MobileConnectionSummary[] }>();
 
@@ -29,12 +30,19 @@ const testing = ref(false);
 const editorMessage = ref("");
 const editorTone = ref<"success" | "danger" | "neutral">("neutral");
 const groupDraft = ref("未分组");
-const tagDraft = ref("");
+const preservedTags = ref<string[]>([]);
 const preferenceRevision = ref(0);
 const hasStoredConnectionString = ref(false);
+const sshProfiles = ref<MobileSshProfileSummary[]>([]);
+const sshProfilesError = ref("");
 const sslCertificateError = computed(() => editorTone.value === "danger" && editorMessage.value.startsWith("SSL 证书验证失败"));
 
 const databaseTypes = mobileDatabaseCapabilities;
+const environmentOptions = [
+  { value: "development", label: "开发" },
+  { value: "staging", label: "预发" },
+  { value: "production", label: "生产" },
+] as const satisfies ReadonlyArray<{ value: ConnectionEnvironment; label: string }>;
 
 function blankDraft(): MobileConnectionDraft {
   const defaults = databaseCapability("postgres");
@@ -47,7 +55,7 @@ function blankDraft(): MobileConnectionDraft {
     username: defaults.defaultUsername,
     password: "",
     database: defaults.defaultDatabase,
-    color: "#c7ff3d",
+    color: null,
     ssl: false,
     sslMode: "verify-full",
     readOnly: false,
@@ -61,6 +69,7 @@ function blankDraft(): MobileConnectionDraft {
     proxyUsername: "",
     proxyPassword: "",
     sshEnabled: false,
+    sshProfileId: "",
     sshHost: "",
     sshPort: 22,
     sshUsername: "",
@@ -75,6 +84,7 @@ function blankDraft(): MobileConnectionDraft {
 
 const draft = reactive<MobileConnectionDraft>(blankDraft());
 const currentCapability = computed(() => databaseCapability(draft.dbType));
+const selectedSshProfile = computed(() => sshProfiles.value.find((profile) => profile.id === draft.sshProfileId) ?? null);
 const preferenceEnvironment = ref<ConnectionEnvironment>("development");
 
 const filteredConnections = computed(() => {
@@ -156,7 +166,7 @@ function resetEditor() {
   Object.assign(draft, blankDraft());
   hasStoredConnectionString.value = false;
   groupDraft.value = "未分组";
-  tagDraft.value = "";
+  preservedTags.value = [];
   preferenceEnvironment.value = "development";
   advancedOpen.value = false;
   editorTab.value = "general";
@@ -167,6 +177,16 @@ function resetEditor() {
 function openCreate() {
   resetEditor();
   editorOpen.value = true;
+}
+
+async function loadSavedSshProfiles() {
+  sshProfilesError.value = "";
+  try {
+    sshProfiles.value = await listSshProfiles();
+  } catch (error) {
+    sshProfiles.value = [];
+    sshProfilesError.value = error instanceof Error ? error.message : "读取已保存 SSH 配置失败";
+  }
 }
 
 async function openEdit(connection: MobileConnectionSummary) {
@@ -186,7 +206,7 @@ async function openEdit(connection: MobileConnectionSummary) {
       username: value.username,
       password: "",
       database: value.database,
-      color: value.color,
+      color: null,
       ssl: value.ssl,
       sslMode: value.sslMode ?? "verify-full",
       readOnly: value.readOnly,
@@ -200,6 +220,7 @@ async function openEdit(connection: MobileConnectionSummary) {
       proxyUsername: value.proxyUsername,
       proxyPassword: "",
       sshEnabled: value.sshEnabled ?? false,
+      sshProfileId: value.sshProfileId ?? "",
       sshHost: value.sshHost ?? "",
       sshPort: value.sshPort ?? 22,
       sshUsername: value.sshUsername ?? "",
@@ -213,7 +234,7 @@ async function openEdit(connection: MobileConnectionSummary) {
     hasStoredConnectionString.value = value.hasConnectionString;
     const local = preference(connection);
     groupDraft.value = local.group;
-    tagDraft.value = local.tags.join(", ");
+    preservedTags.value = local.tags;
     preferenceEnvironment.value = local.environment;
     const preserved: string[] = [];
     if (value.hasPassword || value.hasProxyPassword || value.hasSshPassword) preserved.push("密码");
@@ -253,7 +274,7 @@ function validateDraft(): boolean {
     editorMessage.value = "启用代理后必须填写代理主机和端口。";
     return false;
   }
-  if (draft.sshEnabled && (!draft.sshHost.trim() || !draft.sshPort || !draft.sshUsername.trim())) {
+  if (draft.sshEnabled && !draft.sshProfileId && (!draft.sshHost.trim() || !draft.sshPort || !draft.sshUsername.trim())) {
     editorTone.value = "danger";
     editorMessage.value = "启用 SSH 后必须填写 SSH 主机、端口和用户名。";
     editorTab.value = "ssh";
@@ -284,12 +305,15 @@ async function saveConnection() {
   editorMessage.value = "正在保存…";
   editorTone.value = "neutral";
   try {
+    // 环境标签不仅用于列表筛选：生产环境必须同步到原生连接配置，确保所有数据库写入
+    // 都会经过“输入完整连接名称”的安全门，不能只依赖 WebView 中的视觉标签。
+    draft.isProduction = preferenceEnvironment.value === "production";
     const saved = await saveDirectConnection(draft);
     saveConnectionPreference(saved.id, {
       group: groupDraft.value.trim() || "未分组",
       favorite: draft.id ? preference(saved).favorite : false,
       environment: preferenceEnvironment.value,
-      tags: parseConnectionTags(tagDraft.value),
+      tags: preservedTags.value,
     });
     editorOpen.value = false;
     emit("changed");
@@ -336,6 +360,7 @@ function handleBack() {
 }
 
 defineExpose({ handleBack });
+onMounted(loadSavedSshProfiles);
 </script>
 
 <template>
@@ -368,7 +393,7 @@ defineExpose({ handleBack });
       </button>
       <article v-for="connection in collapsedGroups.has(group.type) ? [] : group.items" :key="connection.id" class="managed-connection">
         <div class="connection-main" role="button" tabindex="0" @click="emit('browse', connection)" @keydown.enter="emit('browse', connection)">
-          <span class="database-mark" :data-type="connection.dbType" :style="{ '--connection-color': connection.color || 'var(--acid)' }">
+          <span class="database-mark" :data-type="connection.dbType">
             <img v-if="databaseIcon(connection.dbType)" :src="databaseIcon(connection.dbType)" alt="" />
             <svg v-else viewBox="0 0 24 24" aria-hidden="true">
               <ellipse cx="12" cy="5.5" rx="7" ry="2.7" />
@@ -428,7 +453,13 @@ defineExpose({ handleBack });
                 </select></label
               >
               <label><span>分组</span><input v-model="groupDraft" placeholder="核心业务" /></label>
-              <label class="wide"><span>自定义标签</span><input v-model="tagDraft" placeholder="核心、只读、临时（使用逗号分隔）" /></label>
+              <fieldset class="wide environment-picker">
+                <legend>环境标签</legend>
+                <label v-for="item in environmentOptions" :key="item.value" :data-env="item.value">
+                  <input v-model="preferenceEnvironment" type="radio" name="connection-environment" :value="item.value" />
+                  <span>{{ item.label }}</span>
+                </label>
+              </fieldset>
               <label class="wide"><span>主机</span><input v-model="draft.host" autocapitalize="none" placeholder="db.internal" /></label>
               <p class="wide remote-hint">
                 <strong>跨网络连接</strong>
@@ -439,15 +470,6 @@ defineExpose({ handleBack });
               <label><span>用户名</span><input v-model="draft.username" autocapitalize="none" autocomplete="username" /></label>
               <label><span>密码</span><input v-model="draft.password" type="password" autocomplete="new-password" placeholder="留空则不修改" /></label>
               <label class="wide"><span>备注</span><textarea v-model="draft.note" rows="2" placeholder="用途、负责人或维护窗口"></textarea></label>
-              <label
-                ><span>环境</span
-                ><select v-model="preferenceEnvironment">
-                  <option value="development">开发</option>
-                  <option value="staging">预发</option>
-                  <option value="production">生产</option>
-                </select></label
-              >
-              <label><span>标识色</span><input v-model="draft.color" type="color" /></label>
             </div>
 
             <p v-if="currentCapability.browse === 'unsupported'" class="capability-notice">此类型可在手机端创建、测试和编辑；当前没有专用数据浏览器，不会调用关系型 Schema API。</p>
@@ -473,7 +495,7 @@ defineExpose({ handleBack });
 
             <div class="toggle-grid">
               <label><input v-model="draft.readOnly" type="checkbox" /><span>只读连接</span></label>
-              <label><input v-model="draft.isProduction" type="checkbox" /><span>生产保护</span></label>
+              <p class="production-hint">选择“生产”环境会自动开启生产写入确认。</p>
             </div>
 
             <button class="advanced-toggle" type="button" @click="advancedOpen = !advancedOpen">
@@ -519,7 +541,21 @@ defineExpose({ handleBack });
               <label class="rail-switch"><input v-model="draft.sshEnabled" type="checkbox" /><span></span></label>
             </div>
             <p>手机先登录跳板机，再由跳板机访问“常规”页中的数据库地址。</p>
-            <div class="editor-grid">
+            <div class="editor-grid ssh-profile-picker">
+              <label class="wide"><span>已保存的 SSH 配置</span>
+                <select v-model="draft.sshProfileId" :disabled="!draft.sshEnabled" @change="draft.sshEnabled = true">
+                  <option value="">手动填写本连接</option>
+                  <option v-for="profile in sshProfiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.username }}@{{ profile.host }}</option>
+                </select>
+              </label>
+            </div>
+            <div v-if="selectedSshProfile" class="saved-ssh-card">
+              <div><strong>{{ selectedSshProfile.name }}</strong><code>{{ selectedSshProfile.username }}@{{ selectedSshProfile.host }}:{{ selectedSshProfile.port }}</code></div>
+              <span>{{ selectedSshProfile.authMethod === "private-key" ? "私钥" : "密码" }}已加密保存</span>
+            </div>
+            <p v-if="sshProfilesError" class="security-note">{{ sshProfilesError }}</p>
+            <p v-else-if="!sshProfiles.length" class="security-note">还没有预存配置，可前往底部“设置”页面添加；也可以继续手动填写。</p>
+            <div v-if="!draft.sshProfileId" class="editor-grid">
               <label class="wide"><span>SSH 主机</span><input v-model="draft.sshHost" :disabled="!draft.sshEnabled" autocapitalize="none" placeholder="bastion.example.com" /></label>
               <label><span>SSH 端口</span><input v-model.number="draft.sshPort" :disabled="!draft.sshEnabled" type="number" min="1" max="65535" /></label>
               <label><span>SSH 用户名</span><input v-model="draft.sshUsername" :disabled="!draft.sshEnabled" autocapitalize="none" autocomplete="username" /></label>
@@ -537,7 +573,7 @@ defineExpose({ handleBack });
                 <label class="wide"><span>私钥口令</span><input v-model="draft.sshPrivateKeyPassphrase" :disabled="!draft.sshEnabled" type="password" autocomplete="new-password" placeholder="可选；留空则沿用" /></label>
               </template>
             </div>
-            <p class="security-note">SSH 密码和私钥通过 Android Keystore 加密保存。生产环境请填写主机密钥指纹，防止跳板机被冒充。</p>
+            <p class="security-note">{{ draft.sshProfileId ? "连接仅保存 SSH 配置 ID，凭据不会复制到 WebView。" : "SSH 密码和私钥通过 Android Keystore 加密保存。" }}生产环境请填写主机密钥指纹，防止跳板机被冒充。</p>
           </section>
 
           <section v-show="editorTab === 'http'" class="connection-tab-panel transport-panel">
@@ -726,7 +762,7 @@ defineExpose({ handleBack });
   place-items: center;
   border-radius: 10px;
   background: transparent;
-  color: var(--connection-color);
+  color: var(--acid);
 }
 .database-mark img {
   width: 38px;
@@ -759,21 +795,13 @@ defineExpose({ handleBack });
 }
 .connection-title em {
   flex: none;
-  border: 1px solid color-mix(in srgb, var(--success) 40%, var(--line));
+  border: 1px solid color-mix(in srgb, var(--acid) 28%, var(--line));
   border-radius: 4px;
-  background: color-mix(in srgb, var(--success) 8%, transparent);
+  background: var(--accent-soft);
   padding: 2px 5px;
-  color: var(--success);
+  color: var(--acid);
   font-size: 8px;
   font-style: normal;
-}
-.connection-title em[data-env="production"] {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
-  color: var(--danger);
-}
-.connection-title em[data-env="staging"] {
-  border-color: color-mix(in srgb, var(--amber) 45%, var(--line));
-  color: var(--amber);
 }
 .connection-main p {
   overflow: hidden;
@@ -987,6 +1015,56 @@ defineExpose({ handleBack });
   color: var(--muted);
   font-size: 9px;
 }
+.environment-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.environment-picker legend {
+  grid-column: 1 / -1;
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+.environment-picker label {
+  position: relative;
+  display: grid;
+  min-height: 48px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--field);
+  color: var(--muted);
+  cursor: pointer;
+}
+.environment-picker input {
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  opacity: 0;
+}
+.environment-picker label > span {
+  margin: 0;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 620;
+}
+.environment-picker label:has(input:focus-visible) {
+  outline: 2px solid var(--acid);
+  outline-offset: 2px;
+}
+.environment-picker label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--acid) 38%, var(--line));
+  background: var(--accent-soft);
+  color: var(--acid);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--acid) 58%, transparent);
+}
 .remote-hint {
   margin: -3px 0 0;
   border-left: 2px solid var(--acid);
@@ -1027,9 +1105,6 @@ defineExpose({ handleBack });
   border-color: var(--acid);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--acid) 12%, transparent);
 }
-.editor-grid input[type="color"] {
-  padding: 5px;
-}
 .toggle-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -1050,6 +1125,18 @@ defineExpose({ handleBack });
 .toggle-grid input,
 .proxy-switch input {
   accent-color: var(--acid);
+}
+.toggle-grid .production-hint {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  margin: 0;
+  border-left: 2px solid var(--acid);
+  background: var(--accent-soft);
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
 }
 .advanced-toggle {
   display: flex;
@@ -1084,6 +1171,39 @@ defineExpose({ handleBack });
   font-family: "PingFang SC", sans-serif;
   font-size: 10px;
   line-height: 1.65;
+}
+.ssh-profile-picker {
+  margin-bottom: 12px;
+}
+.saved-ssh-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  border: 1px solid color-mix(in srgb, var(--acid) 28%, var(--line));
+  border-radius: 8px;
+  background: var(--accent-soft);
+  padding: 11px 12px;
+}
+.saved-ssh-card > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.saved-ssh-card strong {
+  font-size: 11px;
+}
+.saved-ssh-card code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+.saved-ssh-card > span {
+  flex: none;
+  color: var(--acid);
+  font-size: 8px;
 }
 .transport-heading {
   display: flex;

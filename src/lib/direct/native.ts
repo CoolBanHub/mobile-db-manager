@@ -3,6 +3,8 @@ import type {
   MobileConnectionDraft,
   MobileConnectionEditor,
   MobileConnectionSummary,
+  MobileSshProfileDraft,
+  MobileSshProfileSummary,
   QueryResult,
 } from "../mobileTypes";
 
@@ -11,6 +13,10 @@ interface NativeResult<T> {
 }
 
 export interface DirectDatabasePlugin {
+  listSshProfiles(): Promise<NativeResult<MobileSshProfileSummary[]>>;
+  getSshProfile(options: { id: string }): Promise<NativeResult<MobileSshProfileSummary>>;
+  saveSshProfile(options: { profile: MobileSshProfileDraft }): Promise<NativeResult<MobileSshProfileSummary>>;
+  deleteSshProfile(options: { id: string }): Promise<NativeResult<{ ok: boolean }>>;
   listConnections(): Promise<NativeResult<MobileConnectionSummary[]>>;
   getConnection(options: { id: string }): Promise<NativeResult<MobileConnectionEditor>>;
   saveConnection(options: { connection: MobileConnectionDraft }): Promise<NativeResult<MobileConnectionSummary>>;
@@ -42,4 +48,3 @@ export function requireNative() {
     throw new DirectApiError("数据库直连只能在 Android App 中运行");
   }
 }
-
