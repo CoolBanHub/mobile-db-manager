@@ -8,11 +8,13 @@ import static org.junit.Assert.assertTrue;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
@@ -51,6 +53,33 @@ public class DirectDatabasePluginTest {
         assertFalse(DirectDatabasePlugin.isReadOnlySql("SELECT 1; DELETE FROM users"));
         assertFalse(DirectDatabasePlugin.isReadOnlySql("WITH x AS (DELETE FROM users RETURNING *) SELECT * FROM x"));
         assertFalse(DirectDatabasePlugin.isReadOnlySql("/* hidden */ DROP TABLE users"));
+    }
+
+    @Test
+    public void advancedSqlAlwaysRequiresWritableConnectionAndExplicitConfirmation() {
+        // SELECT-like statements can have side effects, so their classification
+        // must not bypass the advanced-mode safety gate.
+        assertTrue(DirectDatabasePlugin.isReadOnlySql("SELECT nextval('order_seq')"));
+        assertTrue(DirectDatabasePlugin.isReadOnlySql("SELECT * INTO users_backup FROM users"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DirectDatabasePlugin.assertQueryAllowed(false, false, "开发库", false, true, false, ""));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DirectDatabasePlugin.assertQueryAllowed(true, false, "只读库", false, true, true, ""));
+
+        DirectDatabasePlugin.assertQueryAllowed(false, false, "开发库", false, true, true, "");
+    }
+
+    @Test
+    public void advancedSqlRequiresExactProductionConnectionNameEvenForSelect() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DirectDatabasePlugin.assertQueryAllowed(false, true, "核心生产库", false, true, true, ""));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DirectDatabasePlugin.assertQueryAllowed(false, true, "核心生产库", false, true, true, "核心生产"));
+        DirectDatabasePlugin.assertQueryAllowed(false, true, "核心生产库", false, true, true, "核心生产库");
     }
 
     @Test
@@ -215,5 +244,50 @@ public class DirectDatabasePluginTest {
 
         assertTrue(DirectJdbcConnectionFactory.isValid(connection, "postgres", 5));
         assertTrue(isValidCalled.get());
+    }
+
+    @Test
+    public void diagnosticsUseVendorSpecificFixedQueries() {
+        assertTrue(DirectJdbcDiagnostics.sessionsSql("postgres").contains("pg_stat_activity"));
+        assertTrue(DirectJdbcDiagnostics.sessionsSql("mysql").contains("information_schema.PROCESSLIST"));
+        assertTrue(DirectJdbcDiagnostics.sessionsSql("sqlserver").contains("sys.dm_exec_sessions"));
+        assertTrue(DirectJdbcDiagnostics.locksSql("postgres", false).contains("pg_blocking_pids"));
+        assertTrue(DirectJdbcDiagnostics.locksSql("mysql", true).contains("INNODB_LOCK_WAITS"));
+        assertTrue(DirectJdbcDiagnostics.locksSql("mysql", false).contains("performance_schema.data_lock_waits"));
+        assertTrue(DirectJdbcDiagnostics.locksSql("sqlserver", false).contains("blocking_session_id"));
+    }
+
+    @Test
+    public void diagnosticsOnlyAcceptPositiveNumericSessionIds() {
+        assertEquals(42L, DirectJdbcDiagnostics.parseSessionId("42"));
+        assertThrows(IllegalArgumentException.class, () -> DirectJdbcDiagnostics.parseSessionId("0"));
+        assertThrows(IllegalArgumentException.class, () -> DirectJdbcDiagnostics.parseSessionId("1; DROP TABLE users"));
+    }
+
+    @Test
+    public void tableTransactionsConvertTypedFormValuesBeforeBinding() {
+        assertEquals(new BigDecimal("42"), DirectJdbcTableTransaction.jdbcValue("42", Types.INTEGER));
+        assertEquals(new BigDecimal("12.50"), DirectJdbcTableTransaction.jdbcValue("12.50", Types.DECIMAL));
+        assertEquals(true, DirectJdbcTableTransaction.jdbcValue("1", Types.BOOLEAN));
+        assertEquals(false, DirectJdbcTableTransaction.jdbcValue("false", Types.BIT));
+        assertEquals("2026-08-05", DirectJdbcTableTransaction.jdbcValue("2026-08-05", Types.DATE));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DirectJdbcTableTransaction.jdbcValue("not-a-number", Types.INTEGER));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DirectJdbcTableTransaction.jdbcValue("yes", Types.BOOLEAN));
+    }
+
+    @Test
+    public void tableTransactionsUsePlaceholdersAndEscapeIdentifiers() {
+        assertEquals("?, ?, ?", DirectJdbcTableTransaction.placeholders(3));
+        assertEquals("\"users\"\"archive\"", DirectJdbcTableTransaction.quote("users\"archive", "postgres"));
+        assertEquals("`users``archive`", DirectJdbcTableTransaction.quote("users`archive", "mysql"));
+        assertEquals("[users]]archive]", DirectJdbcTableTransaction.quote("users]archive", "sqlserver"));
+        assertThrows(IllegalArgumentException.class, () -> DirectJdbcTableTransaction.quote("", "postgres"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DirectJdbcTableTransaction.quote("users\0archive", "postgres"));
     }
 }

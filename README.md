@@ -26,13 +26,17 @@ Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端�
 - 设置首页按界面密度、SSH 跳板机、隐私与安全、关于分成独立子页面，Android
   返回键会先返回设置首页；应用固定使用浅色界面。
 - 支持 PostgreSQL、MySQL/MariaDB、SQL Server 的元数据浏览、SQL 查询和表数据
-  编辑，并可视化设计新表的字段、索引、外键、检查约束、选项与注释后预览 SQL。
+  编辑；新增、修改和删除会先进入待提交队列，复核确认后在同一个 JDBC 事务中执行，
+  任一步失败会整体回滚。也可视化设计新表的字段、索引、外键、检查约束、选项与注释后预览 SQL。
+- 支持 PostgreSQL、MySQL/MariaDB 和 SQL Server 会话诊断：查看正在执行的 SQL、
+  长事务、锁等待与阻塞链；取消 SQL 和终止会话受只读及生产连接确认保护。
 - 支持 Redis Standalone 的 Key 浏览、编辑和 TTL 操作。
 - 支持 MongoDB 的数据库、集合、文档浏览和文档编辑。
 - 支持 etcd v3 JSON Gateway 的前缀查询、键值详情和单键写入。
 - 支持 TLS、SSH 本地端口转发和 HTTP CONNECT 代理。
 - 支持 SQL 格式化、具名 JSON 参数、元数据补全、查询取消、查询历史、本机 SQL
-  收藏和结果导出分享。
+  收藏和结果导出分享；高级 SQL 一律按可写操作保护，只读连接禁止执行，生产连接
+  必须完成本次确认并输入完整连接名称。
 - 支持从 GitHub Releases 检查最新 `release/v*` APK，并通过 Android 系统下载更新。
 
 ## 数据库支持
@@ -143,6 +147,8 @@ Android 原生直连代码在
   的 JDBC URL、驱动加载、SSL 和隧道接入。
 - `DirectJdbcMetadata.java`：JDBC 元数据读取。
 - `DirectJdbcQueryRunner.java`：SQL 执行、分页、结果序列化和取消。
+- `DirectJdbcTableTransaction.java`：校验表结构并用参数化语句原子提交表数据变更。
+- `DirectJdbcDiagnostics.java`：固定的会话、长事务、锁等待和阻塞链诊断动作。
 - `DirectRedisActions.java`、`DirectMongoActions.java`、`DirectEtcdActions.java`：
   面向界面的动作映射和写入保护。
 - `DirectRedisConnection.java`、`DirectMongoConnection.java`、

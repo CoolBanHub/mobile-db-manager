@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import CreateTableEditor from "./CreateTableEditor.vue";
+import SessionDiagnostics from "./SessionDiagnostics.vue";
 import TableDataBrowser from "./TableDataBrowser.vue";
 import { loadDirectMetadata } from "@/lib/direct/metadata";
 import { buildDirectTableTemplate } from "@/lib/direct/tableData";
 import { type ColumnInfo, type DatabaseInfo, type DatabaseObjectInfo, type ForeignKeyInfo, type IndexInfo, type MobileConnectionSummary, type MobileQueryDraft, type MobileTableTarget, type TableInfo } from "@/lib/mobileTypes";
 
-type BrowseLevel = "connections" | "databases" | "schemas" | "tables" | "details" | "data";
+type BrowseLevel = "connections" | "databases" | "schemas" | "tables" | "details" | "data" | "activity";
 type SchemaSection = "relations" | "routines";
 type DetailTab = "columns" | "indexes" | "foreignKeys";
 type InspectorTab = "structure" | "data" | "query";
@@ -83,6 +84,7 @@ const title = computed(() => {
   if (level.value === "tables") return "表与视图";
   if (level.value === "details") return "对象详情";
   if (level.value === "data") return "表数据";
+  if (level.value === "activity") return "会话与锁";
   return "元数据";
 });
 
@@ -202,6 +204,11 @@ function selectInspectorTab(tab: InspectorTab) {
   if (tab === "query") {
     openManagementSql(`-- ${selectedDatabase.value}${selectedSchema.value ? ` / ${selectedSchema.value}` : ""}\nSELECT 1;`);
   }
+}
+
+function openSessionDiagnostics() {
+  if (!selectedConnection.value || !selectedDatabase.value) return;
+  level.value = "activity";
 }
 
 async function fetchTables(connectionId: string, database: string, schema: string, offset: number) {
@@ -511,6 +518,8 @@ function goBack() {
     level.value = "databases";
     tableTarget.value = null;
     selectedTable.value = null;
+  } else if (level.value === "activity") {
+    level.value = "databases";
   } else if (level.value === "details") {
     level.value = "databases";
     selectedTable.value = null;
@@ -578,7 +587,8 @@ onBeforeUnmount(() => {
       @close="createTableOpen = false"
       @open-query="openCreatedTableSql"
     />
-    <TableDataBrowser v-if="level === 'data' && tableTarget" ref="tableDataBrowser" :target="tableTarget" @back="goBack" @open-query="openGeneratedQuery" />
+    <SessionDiagnostics v-if="level === 'activity' && selectedConnection" :connection="selectedConnection" :database="selectedDatabase" @back="goBack" />
+    <TableDataBrowser v-else-if="level === 'data' && tableTarget" ref="tableDataBrowser" :target="tableTarget" @back="goBack" @open-query="openGeneratedQuery" />
     <template v-else>
       <div v-if="level === 'details'" class="browser-toolbar">
         <button type="button" aria-label="返回上一级" @click="goBack">←</button>
@@ -708,6 +718,7 @@ onBeforeUnmount(() => {
               <button :class="{ active: inspectorTab === 'structure' }" type="button" @click="selectInspectorTab('structure')">结构</button>
               <button :class="{ active: inspectorTab === 'data' }" type="button" @click="selectInspectorTab('data')">数据</button>
               <button :class="{ active: inspectorTab === 'query' }" type="button" @click="selectInspectorTab('query')">查询</button>
+              <button type="button" @click="openSessionDiagnostics">活动</button>
             </nav>
             <div v-if="inspectorTab === 'structure'" class="schema-summary">
               <div class="schema-summary-title">
@@ -760,7 +771,7 @@ onBeforeUnmount(() => {
           <div class="administration-actions">
             <span>数据库运维</span>
             <button type="button" @click="openAdministrationSql('users')">用户</button>
-            <button type="button" @click="openAdministrationSql('sessions')">会话 / 进程</button>
+            <button type="button" @click="openSessionDiagnostics">会话 / 锁</button>
             <button type="button" @click="openAdministrationSql('monitor')">监控指标</button>
           </div>
           <div class="object-tabs">
@@ -1534,7 +1545,7 @@ onBeforeUnmount(() => {
 }
 .schema-inspector nav {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border-bottom: 1px solid var(--line);
 }
 .schema-inspector nav button {

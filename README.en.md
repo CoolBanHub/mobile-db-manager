@@ -40,8 +40,13 @@ SSH tunnel, HTTP CONNECT proxy.
   focused subpages from the Settings index. Android Back returns to the Settings
   index first, and the app uses a fixed light interface.
 - Browse metadata, run SQL queries, and edit table data for PostgreSQL,
-  MySQL/MariaDB, and SQL Server. Visually design new table columns, indexes,
-  foreign keys, checks, options, and comments before previewing the SQL.
+  MySQL/MariaDB, and SQL Server. Inserts, updates, and deletes are staged for
+  review, then executed in one JDBC transaction with full rollback on failure.
+  Visually design new table columns, indexes, foreign keys, checks, options, and
+  comments before previewing the SQL.
+- Diagnose PostgreSQL, MySQL/MariaDB, and SQL Server sessions, running SQL,
+  long transactions, lock waits, and blocking chains. Query cancellation and
+  session termination remain protected by read-only and Production safeguards.
 - Browse Redis Standalone keys, inspect values, edit supported data types, and
   manage TTL.
 - Browse MongoDB databases, collections, documents, and edit documents.
@@ -50,6 +55,9 @@ SSH tunnel, HTTP CONNECT proxy.
 - Use TLS, SSH local port forwarding, and HTTP CONNECT proxy tunnels.
 - Format SQL, use named JSON parameters, autocomplete metadata, cancel queries,
   store query history, save local SQL snippets, and share exported results.
+  Advanced SQL is always guarded as potentially writable: read-only connections
+  cannot run it, and Production requires one-shot confirmation plus the full
+  connection name.
 - Check GitHub Releases for the latest `release/v*` APK and download updates
   through Android's system download manager.
 
@@ -165,6 +173,10 @@ Android native direct-connect code lives in
 - `DirectJdbcMetadata.java`: JDBC metadata loading.
 - `DirectJdbcQueryRunner.java`: SQL execution, pagination, result serialization,
   and cancellation.
+- `DirectJdbcTableTransaction.java`: validates live table metadata and atomically
+  commits table mutations with parameterized statements.
+- `DirectJdbcDiagnostics.java`: fixed session, long-transaction, lock-wait, and
+  blocking-chain diagnostic actions.
 - `DirectRedisActions.java`, `DirectMongoActions.java`, `DirectEtcdActions.java`:
   UI action mapping and write protection.
 - `DirectRedisConnection.java`, `DirectMongoConnection.java`,

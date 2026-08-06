@@ -171,25 +171,72 @@ public class DirectDatabasePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void diagnostics(PluginCall call) {
+        run(call, () -> {
+            JSONObject config = requiredConfig(call.getString("connectionId"));
+            String action = DirectJson.required(call.getString("action"), "action");
+            String database = call.getString("database", DirectJson.optionalDatabase(config));
+            if ("sessions".equals(action) || "locks".equals(action)) {
+                return DirectJdbcDiagnostics.list(config, database, action);
+            }
+            if (config.optBoolean("readOnly", false)) {
+                throw new IllegalArgumentException("此连接已设为只读，不能取消或终止数据库会话");
+            }
+            if (!call.getBoolean("confirmedAction", false)) {
+                throw new IllegalArgumentException("会话操作必须经过明确确认");
+            }
+            if (config.optBoolean("isProduction", false)
+                    && !config.optString("name").equals(call.getString("productionConfirmation", ""))) {
+                throw new IllegalArgumentException("生产连接操作前必须输入完整连接名称");
+            }
+            return DirectJdbcDiagnostics.interrupt(
+                    config,
+                    database,
+                    action,
+                    DirectJson.required(call.getString("sessionId"), "sessionId"));
+        });
+    }
+
+    @PluginMethod
+    public void tableTransaction(PluginCall call) {
+        run(call, () -> {
+            JSONObject config = requiredConfig(call.getString("connectionId"));
+            if (config.optBoolean("readOnly", false)) {
+                throw new IllegalArgumentException("此连接已设为只读，不能提交表数据事务");
+            }
+            if (!call.getBoolean("confirmedWrite", false)) {
+                throw new IllegalArgumentException("事务提交前必须明确确认全部变更");
+            }
+            if (config.optBoolean("isProduction", false)
+                    && !config.optString("name").equals(call.getString("productionConfirmation", ""))) {
+                throw new IllegalArgumentException("生产连接提交前必须输入完整连接名称");
+            }
+            JSArray changes = call.getArray("changes");
+            if (changes == null) throw new IllegalArgumentException("changes不能为空");
+            return DirectJdbcTableTransaction.execute(
+                    config,
+                    call.getString("database", DirectJson.optionalDatabase(config)),
+                    call.getString("schema", ""),
+                    DirectJson.required(call.getString("table"), "table"),
+                    changes);
+        });
+    }
+
+    @PluginMethod
     public void query(PluginCall call) {
         run(call, () -> {
             JSONObject config = requiredConfig(call.getString("connectionId"));
             String sql = DirectJson.required(call.getString("sql"), "sql").trim();
             boolean readOnly = call.getBoolean("readOnly", true);
             boolean readOnlySql = DirectSqlSafety.isReadOnlySql(sql);
-            if (readOnly && !readOnlySql) {
-                throw new IllegalArgumentException("只读模式已阻止可能修改数据的语句");
-            }
-            if (!readOnly && !readOnlySql && config.optBoolean("readOnly", false)) {
-                throw new IllegalArgumentException("此连接已设为只读，不能执行高级写入");
-            }
-            if (!readOnly && !readOnlySql && !call.getBoolean("confirmedWrite", false)) {
-                throw new IllegalArgumentException("写入语句必须先勾选本次写入确认");
-            }
-            if (!readOnly && !readOnlySql && config.optBoolean("isProduction", false)
-                    && !config.optString("name").equals(call.getString("productionConfirmation", ""))) {
-                throw new IllegalArgumentException("生产连接写入前必须输入完整连接名称");
-            }
+            assertQueryAllowed(
+                    config.optBoolean("readOnly", false),
+                    config.optBoolean("isProduction", false),
+                    config.optString("name"),
+                    readOnly,
+                    readOnlySql,
+                    call.getBoolean("confirmedWrite", false),
+                    call.getString("productionConfirmation", ""));
             return queryRunner.execute(
                     config,
                     call.getString("database", ""),
@@ -249,6 +296,37 @@ public class DirectDatabasePlugin extends Plugin {
 
     static boolean isReadOnlySql(String sql) {
         return DirectSqlSafety.isReadOnlySql(sql);
+    }
+
+    /**
+     * Treat every advanced-mode request as potentially writable. SQL keyword
+     * classification is only an additional safe-mode rejection mechanism; it
+     * must never decide whether read-only or Production safeguards apply.
+     */
+    static void assertQueryAllowed(
+            boolean connectionReadOnly,
+            boolean production,
+            String connectionName,
+            boolean requestedReadOnly,
+            boolean classifiedReadOnly,
+            boolean confirmedWrite,
+            String productionConfirmation) {
+        if (requestedReadOnly) {
+            if (!classifiedReadOnly) {
+                throw new IllegalArgumentException("只读模式已阻止可能修改数据的语句");
+            }
+            return;
+        }
+        if (connectionReadOnly) {
+            throw new IllegalArgumentException("此连接已设为只读，不能执行高级 SQL");
+        }
+        if (!confirmedWrite) {
+            throw new IllegalArgumentException("高级 SQL 必须先勾选本次执行确认");
+        }
+        if (production
+                && !connectionName.equals(productionConfirmation == null ? "" : productionConfirmation)) {
+            throw new IllegalArgumentException("生产连接执行高级 SQL 前必须输入完整连接名称");
+        }
     }
 
     static void applySecurityProperties(Properties properties, String type, boolean ssl, String sslMode) {

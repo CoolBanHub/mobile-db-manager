@@ -23,6 +23,8 @@ export interface DirectDatabasePlugin {
   deleteConnection(options: { id: string }): Promise<NativeResult<{ ok: boolean }>>;
   testConnection(options: { connection: MobileConnectionDraft }): Promise<NativeResult<{ message: string }>>;
   metadata(options: Record<string, unknown>): Promise<NativeResult<unknown>>;
+  diagnostics(options: Record<string, unknown>): Promise<NativeResult<unknown>>;
+  tableTransaction(options: Record<string, unknown>): Promise<NativeResult<unknown>>;
   query(options: Record<string, unknown>): Promise<NativeResult<QueryResult>>;
   redis(options: Record<string, unknown>): Promise<NativeResult<unknown>>;
   mongo(options: Record<string, unknown>): Promise<NativeResult<unknown>>;

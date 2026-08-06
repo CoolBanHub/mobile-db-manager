@@ -41,6 +41,8 @@ Android 原生直连代码放在 `android/app/src/main/java/com/coolbanhub/mobil
 - `DirectJdbcConnectionFactory.java`：PostgreSQL、MySQL/MariaDB、SQL Server 的 JDBC URL、驱动加载、SSL 和隧道接入。
 - `DirectJdbcMetadata.java`：JDBC 元数据读取。
 - `DirectJdbcQueryRunner.java`：SQL 执行、分页、结果序列化和取消。
+- `DirectJdbcTableTransaction.java`：表数据新增、修改和删除的参数化事务提交与整体回滚。
+- `DirectJdbcDiagnostics.java`：会话、长事务、锁等待、阻塞链及受保护的会话操作。
 - `DirectRedisActions.java`、`DirectMongoActions.java`、`DirectEtcdActions.java`：面向界面的动作映射和写入保护。
 - `DirectRedisConnection.java`、`DirectMongoConnection.java`、`DirectEtcdConnection.java`：各数据库的底层连接客户端。
 - `DirectTransport.java`：SSH 转发和 HTTP CONNECT 隧道。

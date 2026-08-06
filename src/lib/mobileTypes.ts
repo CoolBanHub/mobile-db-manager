@@ -174,6 +174,33 @@ export interface QueryResult {
   has_more?: boolean;
 }
 
+export interface MobileDatabaseSession {
+  sessionId: string;
+  user: string;
+  database: string;
+  client: string;
+  state: string;
+  command: string;
+  query: string;
+  queryStartedAt: string;
+  transactionStartedAt: string;
+  durationMs: number;
+  transactionDurationMs: number;
+  waitType: string;
+  waitEvent: string;
+}
+
+export interface MobileDatabaseLock {
+  waitingSessionId: string;
+  blockingSessionId: string;
+  database: string;
+  objectName: string;
+  waitType: string;
+  durationMs: number;
+  waitingQuery: string;
+  blockingQuery: string;
+}
+
 export interface MobileTableTarget {
   connectionId: string;
   database: string;
@@ -205,6 +232,17 @@ export interface MobileTableDataResponse {
   editBlockReason: string | null;
   connectionName: string;
   isProduction: boolean;
+}
+
+export type MobileTableTransactionChange =
+  | { kind: "insert"; values: Record<string, unknown> }
+  | { kind: "update"; values: Record<string, unknown>; primaryKey: Record<string, unknown> }
+  | { kind: "delete"; primaryKey: Record<string, unknown> };
+
+export interface MobileTableTransactionResult {
+  committed: boolean;
+  operationCount: number;
+  affectedRows: number;
 }
 
 export type RedisKeyType = "string" | "hash" | "list" | "set" | "zset" | "stream" | "none" | string;

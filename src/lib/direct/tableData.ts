@@ -1,8 +1,8 @@
-import type { ColumnInfo, MobileConnectionSummary, MobileTableDataResponse } from "../mobileTypes";
+import type { ColumnInfo, MobileConnectionSummary, MobileTableDataResponse, MobileTableTransactionChange, MobileTableTransactionResult } from "../mobileTypes";
 import { listDirectConnections } from "./connections";
 import { id } from "./localStore";
 import { loadDirectMetadata } from "./metadata";
-import { DirectApiError, requireNative } from "./native";
+import { DirectApiError, DirectDatabase, requireNative } from "./native";
 import { executeDirectQuery } from "./query";
 
 function quoteIdentifier(value: unknown, dbType: string): string {
@@ -32,27 +32,11 @@ async function directTableContext(payload: Record<string, unknown>) {
   return { connection, columns };
 }
 
-function directUpdateLiteral(value: unknown, dbType: string): string {
-  if (value === null || value === undefined) return "NULL";
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
-  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
-  const escaped = text.replaceAll("'", "''");
-  return `'${dbType === "mysql" ? escaped.replaceAll("\\", "\\\\") : escaped}'`;
-}
-
 function assertDirectTableWrite(payload: Record<string, unknown>, connection: MobileConnectionSummary) {
   if (connection.readOnly) throw new DirectApiError("此连接已设置为只读");
   if (connection.isProduction && String(payload.productionConfirmation ?? "") !== connection.name) {
     throw new DirectApiError("生产连接写入前必须输入完整连接名称");
   }
-}
-
-function directQualifiedTable(payload: Record<string, unknown>, dbType: string) {
-  return [payload.schema, payload.table]
-    .filter(Boolean)
-    .map((item) => quoteIdentifier(item, dbType))
-    .join(".");
 }
 
 export async function buildDirectTableTemplate(payload: Record<string, unknown>): Promise<string> {
@@ -98,101 +82,26 @@ export async function loadDirectTableData(payload: Record<string, unknown>): Pro
   };
 }
 
-export async function updateDirectTableCell(payload: Record<string, unknown>) {
-  const { connection, columns } = await directTableContext(payload);
+export async function commitDirectTableTransaction(payload: {
+  connectionId: string;
+  database: string;
+  schema: string | null;
+  table: string;
+  changes: MobileTableTransactionChange[];
+  productionConfirmation?: string;
+}): Promise<MobileTableTransactionResult> {
+  const { connection } = await directTableContext(payload);
   assertDirectTableWrite(payload, connection);
-  const columnIndex = columns.findIndex((column) => column.name === payload.column);
-  if (columnIndex < 0) throw new DirectApiError("要修改的字段已不存在");
-  const primaryKeys = columns.filter((column) => column.is_primary_key);
-  if (!primaryKeys.length) throw new DirectApiError("表没有主键，无法安全定位要修改的行");
-  const originalRow = Array.isArray(payload.originalRow) ? payload.originalRow : [];
-  if (originalRow.length !== columns.length) throw new DirectApiError("当前行与表字段不匹配，请刷新后重试");
-  const primaryPredicates = primaryKeys.map((primaryKey) => {
-    const index = columns.findIndex((column) => column.name === primaryKey.name);
-    const value = originalRow[index];
-    const identifier = quoteIdentifier(primaryKey.name, connection.dbType);
-    return value === null || value === undefined ? `${identifier} IS NULL` : `${identifier} = ${directUpdateLiteral(value, connection.dbType)}`;
-  });
-  const table = [payload.schema, payload.table]
-    .filter(Boolean)
-    .map((item) => quoteIdentifier(item, connection.dbType))
-    .join(".");
-  const column = quoteIdentifier(columns[columnIndex].name, connection.dbType);
-  const sql = `UPDATE ${table} SET ${column} = ${directUpdateLiteral(payload.value, connection.dbType)} WHERE ${primaryPredicates.join(" AND ")};`;
-  const result = await executeDirectQuery(
-    {
+  if (!payload.changes.length) throw new DirectApiError("没有待提交的表数据变更");
+  if (payload.changes.length > 100) throw new DirectApiError("一次最多提交 100 项表数据变更");
+  // The native side reloads columns and primary keys and builds parameterized SQL;
+  // the WebView never supplies executable transaction statements.
+  return (
+    await DirectDatabase.tableTransaction({
       ...payload,
-      sql,
-      executionId: id(),
-      offset: 0,
-      pageSize: 1,
-      connectionName: connection.name,
       confirmedWrite: true,
-    },
-    false,
-  );
-  return { affectedRows: result.affected_rows };
-}
-
-export async function insertDirectTableRow(payload: Record<string, unknown>) {
-  const { connection, columns } = await directTableContext(payload);
-  assertDirectTableWrite(payload, connection);
-  const row = Array.isArray(payload.row) ? payload.row : [];
-  const providedColumns = Array.isArray(payload.providedColumns) ? payload.providedColumns : row.map(() => true);
-  if (row.length !== columns.length || providedColumns.length !== columns.length) {
-    throw new DirectApiError("新增行与表字段不匹配，请刷新后重试");
-  }
-  const included = columns.map((column, index) => ({ column, index })).filter(({ index }) => providedColumns[index]);
-  const table = directQualifiedTable(payload, connection.dbType);
-  const sql = included.length
-    ? `INSERT INTO ${table} (${included.map(({ column }) => quoteIdentifier(column.name, connection.dbType)).join(", ")}) VALUES (${included.map(({ index }) => directUpdateLiteral(row[index], connection.dbType)).join(", ")});`
-    : connection.dbType === "mysql"
-      ? `INSERT INTO ${table} () VALUES ();`
-      : `INSERT INTO ${table} DEFAULT VALUES;`;
-  const result = await executeDirectQuery(
-    {
-      ...payload,
-      sql,
-      executionId: id(),
-      offset: 0,
-      pageSize: 1,
-      connectionName: connection.name,
-      confirmedWrite: true,
-    },
-    false,
-  );
-  return { affectedRows: result.affected_rows };
-}
-
-export async function deleteDirectTableRow(payload: Record<string, unknown>) {
-  const { connection, columns } = await directTableContext(payload);
-  assertDirectTableWrite(payload, connection);
-  const originalRow = Array.isArray(payload.originalRow) ? payload.originalRow : [];
-  if (originalRow.length !== columns.length) {
-    throw new DirectApiError("当前行与表字段不匹配，请刷新后重试");
-  }
-  const primaryKeys = columns.filter((column) => column.is_primary_key);
-  if (!primaryKeys.length) throw new DirectApiError("表没有主键，无法安全删除数据");
-  const predicates = primaryKeys.map((primaryKey) => {
-    const index = columns.findIndex((column) => column.name === primaryKey.name);
-    const value = originalRow[index];
-    const identifier = quoteIdentifier(primaryKey.name, connection.dbType);
-    return value === null || value === undefined ? `${identifier} IS NULL` : `${identifier} = ${directUpdateLiteral(value, connection.dbType)}`;
-  });
-  const sql = `DELETE FROM ${directQualifiedTable(payload, connection.dbType)} WHERE ${predicates.join(" AND ")};`;
-  const result = await executeDirectQuery(
-    {
-      ...payload,
-      sql,
-      executionId: id(),
-      offset: 0,
-      pageSize: 1,
-      connectionName: connection.name,
-      confirmedWrite: true,
-    },
-    false,
-  );
-  return { affectedRows: result.affected_rows };
+    })
+  ).value as MobileTableTransactionResult;
 }
 
 async function tableSelectSql(
@@ -252,4 +161,3 @@ async function tableSelectSql(
   }
   return `${sql};`;
 }
-

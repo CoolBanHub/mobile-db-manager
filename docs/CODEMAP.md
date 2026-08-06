@@ -16,8 +16,9 @@
 | 连接列表、连接表单、收藏、分组、搜索 | `src/features/connections/ConnectionManager.vue` | `src/lib/direct/connections.ts`、`src/lib/connectionPreferences.ts` | `DirectConnectionStore.java`、`SecureVaultStore.java`、`DirectConnectionValidator.java` |
 | 设置页、可复用 SSH 配置 | `src/features/settings/SettingsPage.vue` | `src/lib/direct/sshProfiles.ts` | `DirectSshProfileStore.java`、`SecureVaultStore.java` |
 | PostgreSQL / MySQL / SQL Server 元数据浏览 | `src/features/browse/relational/MetadataBrowser.vue` | `src/lib/direct/metadata.ts`、`src/lib/databaseCapabilities.ts` | `DirectJdbcMetadata.java`、`DirectJdbcConnectionFactory.java` |
-| 关系型表数据浏览和行级增删改 | `src/features/browse/relational/TableDataBrowser.vue` | `src/lib/direct/tableData.ts` | `DirectJdbcQueryRunner.java`、`DirectJdbcConnectionFactory.java` |
+| 关系型表数据浏览和安全事务增删改 | `src/features/browse/relational/TableDataBrowser.vue` | `src/lib/direct/tableData.ts` | `DirectJdbcTableTransaction.java`、`DirectJdbcQueryRunner.java`、`DirectJdbcConnectionFactory.java` |
 | SQL 工作台、查询 Tab、执行、取消、Explain | `src/features/query/QueryWorkbench.vue` | `src/lib/direct/query.ts`、`src/lib/sqlEditor.ts`、`src/lib/sqlParameters.ts` | `DirectJdbcQueryRunner.java`、`DirectSqlSafety.java` |
+| 会话、正在执行的 SQL、长事务、锁等待和阻塞链 | `src/features/browse/relational/SessionDiagnostics.vue` | `src/lib/direct/diagnostics.ts` | `DirectJdbcDiagnostics.java`、`DirectDatabasePlugin.java` |
 | 查询结果导出和分享文件名 | `src/features/query/QueryWorkbench.vue` | `src/lib/queryExport.ts` | Android 系统分享由 Capacitor 插件处理 |
 | 查询历史和 SQL 收藏 | `src/features/query/HistoryLibrary.vue` | `src/lib/direct/history.ts`、`src/lib/direct/savedSql.ts` | 无，当前保存在 WebView localStorage |
 | Redis Key 浏览、详情、TTL、固定写入动作 | `src/features/browse/redis/RedisDataBrowser.vue` | `src/lib/direct/redis.ts` | `DirectRedisActions.java`、`DirectRedisConnection.java` |
@@ -62,8 +63,9 @@
 | 连接保存后密码丢失、编辑连接不回填密钥状态 | `DirectConnectionStore.java`、`SecureVaultStore.java`、`src/lib/direct/connections.ts` |
 | 测试连接失败但错误信息不友好 | 对应 `Direct<Db>Connection.java`、`DirectErrors.java` |
 | SQL 被错误判定为写入或只读 | `DirectSqlSafety.java` 和 `android/app/src/test/.../DirectDatabasePluginTest.java` |
+| 会话列表为空、锁诊断权限不足或取消/终止失败 | `SessionDiagnostics.vue`、`src/lib/direct/diagnostics.ts`、`DirectJdbcDiagnostics.java` |
 | 查询能执行但结果类型显示异常 | `DirectJdbcQueryRunner.java`、`src/lib/mobileTypes.ts`、`QueryWorkbench.vue` |
-| 表数据无法保存或提示缺主键 | `src/lib/direct/tableData.ts`、`TableDataBrowser.vue` |
+| 表数据事务无法提交、已回滚或提示缺主键 | `src/lib/direct/tableData.ts`、`TableDataBrowser.vue`、`DirectJdbcTableTransaction.java` |
 | Redis Key 列表重复、详情为空或大 Key 卡顿 | `RedisDataBrowser.vue`、`DirectRedisActions.java`、`DirectRedisConnection.java` |
 | MongoDB 某个集合无法读取 | `MongoDataBrowser.vue`、`DirectMongoActions.java`、`DirectMongoConnection.java` |
 | etcd 前缀查询结果不对或二进制值被破坏 | `EtcdDataBrowser.vue`、`DirectEtcdActions.java`、`DirectEtcdConnection.java` |

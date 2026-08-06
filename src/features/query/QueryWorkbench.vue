@@ -110,6 +110,7 @@ const resultPage = computed(() => Math.floor(resultOffset.value / QUERY_PAGE_SIZ
 const advancedMode = computed(() => executionMode.value !== "safe");
 const writeAllowed = computed(() => selectedConnection.value && !selectedConnection.value.readOnly);
 const productionConfirmed = computed(() => !selectedConnection.value?.isProduction || productionConfirmation.value.trim() === selectedConnection.value.name);
+const advancedExecutionReady = computed(() => !advancedMode.value || (!!writeAllowed.value && confirmedWrite.value && productionConfirmed.value));
 const chartRows = computed(() => {
   if (!result.value || result.value.columns.length < 2) return [];
   const numericColumn = result.value.columns.findIndex((_, index) => result.value!.rows.some((row) => typeof row[index] === "number"));
@@ -167,6 +168,18 @@ function executableSql(source = sql.value) {
 }
 
 async function executeAdvanced(source = sql.value) {
+  if (!selectedConnection.value || selectedConnection.value.readOnly) {
+    error.value = "只读连接禁止高级 SQL，请切换到安全模式执行查询";
+    return;
+  }
+  if (!confirmedWrite.value) {
+    error.value = "高级 SQL 可能产生副作用，请先确认本次执行";
+    return;
+  }
+  if (!productionConfirmed.value) {
+    error.value = "生产连接名称不匹配，高级 SQL 未执行";
+    return;
+  }
   const requestId = ++queryRequestId;
   const executionId = createExecutionId();
   activeExecutionId = executionId;
@@ -174,7 +187,7 @@ async function executeAdvanced(source = sql.value) {
   error.value = "";
   result.value = null;
   try {
-    // 参数先在前端解析为完整 SQL；原生层仍独立执行只读、写确认和生产连接校验。
+    // 参数先在前端解析；原生侧把所有高级 SQL 都按可写请求重新执行安全校验。
     const resolvedSql = executableSql(source);
     const response = await executeDirectQuery(
       {
@@ -197,8 +210,17 @@ async function executeAdvanced(source = sql.value) {
     if (requestId === queryRequestId) {
       executing.value = false;
       activeExecutionId = null;
+      confirmedWrite.value = false;
+      productionConfirmation.value = "";
     }
   }
+}
+
+function toggleExecutionMode() {
+  executionMode.value = advancedMode.value ? "safe" : "advanced";
+  confirmedWrite.value = false;
+  productionConfirmation.value = "";
+  error.value = "";
 }
 
 async function explainQuery() {
@@ -1030,13 +1052,13 @@ defineExpose({ handleBack });
     <div class="editor">
       <div class="query-toolbar">
         <div class="run-control">
-          <button :disabled="executing || !queryExecutionSupported || !database || !sql.trim()" type="button" @click="runSelected">
+          <button :disabled="executing || !queryExecutionSupported || !database || !sql.trim() || !advancedExecutionReady" type="button" @click="runSelected">
             ▶ <span>{{ executing ? "运行中" : "运行" }}</span>
           </button>
           <button :disabled="executing || !queryExecutionSupported" type="button" aria-label="运行选项" @click="runMenuOpen = !runMenuOpen">⌄</button>
           <div v-if="runMenuOpen" class="run-menu">
-            <button type="button" @click="runSelected">运行所选</button>
-            <button type="button" @click="runAll">运行全部</button>
+            <button :disabled="!advancedExecutionReady" type="button" @click="runSelected">运行所选</button>
+            <button :disabled="!advancedExecutionReady" type="button" @click="runAll">运行全部</button>
           </div>
         </div>
         <button :disabled="!executing || cancelling" type="button" @click="cancelQuery">■ <span>停止</span></button>
@@ -1044,12 +1066,12 @@ defineExpose({ handleBack });
         <button :disabled="explaining || !queryExecutionSupported || !database || !sql.trim()" type="button" @click="explainQuery">≋ <span>解释</span></button>
         <i></i>
         <button type="button" @click="formatCurrentSql">〈〉 <span>格式化</span></button>
-        <button type="button" aria-label="切换执行模式" @click="executionMode = advancedMode ? 'safe' : 'advanced'">⋮</button>
+        <button type="button" aria-label="切换执行模式" @click="toggleExecutionMode">⋮</button>
       </div>
       <div v-if="advancedMode" class="advanced-guard">
         <label>
           <input v-model="confirmedWrite" type="checkbox" :disabled="!writeAllowed" />
-          <span>{{ writeAllowed ? "允许本次执行包含 INSERT / UPDATE / DELETE / DDL" : "该连接为只读，写操作不可用" }}</span>
+          <span>{{ writeAllowed ? "我确认高级模式中的任何语句都按可写操作执行" : "只读连接禁止高级模式，请切换安全模式" }}</span>
         </label>
         <input v-if="selectedConnection?.isProduction" v-model="productionConfirmation" :placeholder="`生产库确认：输入 ${selectedConnection.name}`" autocomplete="off" />
       </div>
