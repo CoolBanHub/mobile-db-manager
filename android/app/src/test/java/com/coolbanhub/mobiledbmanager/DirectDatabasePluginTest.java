@@ -20,6 +20,9 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.KeyPair;
+
 import org.junit.Test;
 
 public class DirectDatabasePluginTest {
@@ -38,6 +41,19 @@ public class DirectDatabasePluginTest {
                         "生产跳板机", "bastion.example.com", 22, "deploy",
                         "private-key", "", ""));
         assertTrue(error.getMessage().contains("私钥"));
+    }
+
+    @Test
+    public void inspectsSshPrivateKeyWithoutReturningItsContent() throws Exception {
+        KeyPair pair = KeyPair.genKeyPair(new JSch(), KeyPair.RSA, 1024);
+        ByteArrayOutputStream privateKey = new ByteArrayOutputStream();
+        pair.writePrivateKey(privateKey);
+        DirectSshKeyStore.KeyMetadata metadata = DirectSshKeyStore.inspect(
+                privateKey.toString(StandardCharsets.UTF_8.name()), "");
+        pair.dispose();
+
+        assertEquals("ssh-rsa", metadata.keyType);
+        assertTrue(metadata.fingerprint.startsWith("SHA256:"));
     }
 
     @Test

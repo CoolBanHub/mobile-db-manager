@@ -244,4 +244,43 @@ pre { overflow: auto; max-height: 130px; margin: 0; border-top: 1px solid var(--
 .diagnostic-state p { margin: 8px 0 0; font-size: 8px; line-height: 1.6; }
 .diagnostic-state small { display: block; margin-top: 9px; font-size: 7px; line-height: 1.6; }
 .diagnostic-state.error strong { color: var(--danger); }
+
+.diagnostics {
+  min-width: 0;
+  max-width: 100%;
+  padding-bottom: var(--space-4);
+}
+.diagnostic-summary,
+.session-card,
+.lock-card,
+.action-message,
+.readonly-note,
+.diagnostic-state {
+  border-color: var(--divider-color);
+  border-radius: var(--radius-card);
+  background: var(--card-background);
+}
+.diagnostic-tabs {
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.diagnostic-tabs button.active {
+  color: var(--primary);
+  box-shadow: inset 0 -2px var(--primary);
+}
+.session-card pre,
+.lock-card pre {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  background: var(--input-background);
+}
+.readonly-note {
+  border-color: color-mix(in srgb, var(--readonly) 35%, var(--divider-color));
+  background: color-mix(in srgb, var(--readonly) 7%, var(--card-background));
+  color: var(--readonly);
+}
+.session-actions button.danger {
+  background: color-mix(in srgb, var(--danger) 6%, var(--card-background));
+}
 </style>

@@ -46,6 +46,7 @@ Android 原生直连代码放在 `android/app/src/main/java/com/coolbanhub/mobil
 - `DirectRedisActions.java`、`DirectMongoActions.java`、`DirectEtcdActions.java`：面向界面的动作映射和写入保护。
 - `DirectRedisConnection.java`、`DirectMongoConnection.java`、`DirectEtcdConnection.java`：各数据库的底层连接客户端。
 - `DirectTransport.java`：SSH 转发和 HTTP CONNECT 隧道。
+- `DirectSshProfileStore.java`、`DirectSshKeyStore.java`：SSH 跳板机、独立密钥及旧私钥迁移。
 - `DirectConnectionStore.java`、`SecureVaultStore.java`：连接配置和敏感信息保存。
 - `AppUpdatePlugin.java`、`AppReleaseUpdateService.java`、`AppUpdateVersion.java`：GitHub Release 检查、APK 下载和版本比较。
 

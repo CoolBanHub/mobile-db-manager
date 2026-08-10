@@ -86,7 +86,7 @@ export interface MobileConnectionEditor extends MobileConnectionSummary {
 }
 
 export interface MobileSshProfileSummary {
-  // 原生侧只返回 has* 状态，已保存的凭据本身不得进入 WebView。
+  // 跳板机只引用独立密钥 ID；已保存的密码和私钥本身不得进入 WebView。
   id: string;
   name: string;
   host: string;
@@ -95,12 +95,12 @@ export interface MobileSshProfileSummary {
   hostKeyFingerprint: string;
   authMethod: "password" | "private-key";
   hasPassword: boolean;
-  hasPrivateKey: boolean;
-  hasPrivateKeyPassphrase: boolean;
+  keyId: string;
+  keyName: string;
 }
 
 export interface MobileSshProfileDraft {
-  // 秘密字段仅承载用户本次输入；编辑已有配置时传空字符串表示保留原密文。
+  // password 仅承载用户本次输入；编辑已有配置时传空字符串表示保留原密文。
   id?: string;
   name: string;
   host: string;
@@ -109,6 +109,24 @@ export interface MobileSshProfileDraft {
   hostKeyFingerprint: string;
   authMethod: "password" | "private-key";
   password: string;
+  keyId: string;
+}
+
+export interface MobileSshKeySummary {
+  // 摘要只包含可公开展示的公钥元数据和秘密存在状态。
+  id: string;
+  name: string;
+  keyType: string;
+  fingerprint: string;
+  hasPrivateKey: boolean;
+  hasPassphrase: boolean;
+  usageCount: number;
+}
+
+export interface MobileSshKeyDraft {
+  // 文件导入在原生层完成；该 privateKey 字段仅供用户主动粘贴时使用。
+  id?: string;
+  name: string;
   privateKey: string;
   privateKeyPassphrase: string;
 }

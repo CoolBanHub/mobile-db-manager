@@ -578,14 +578,18 @@ onMounted(() => loadPage(0));
 <template>
   <section class="table-data">
     <header class="data-toolbar">
-      <button class="back" type="button" aria-label="返回表列表" @click="emit('back')">←</button>
+      <button class="back" type="button" aria-label="返回表列表" @click="emit('back')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /><path d="M9 12h10" /></svg>
+      </button>
       <div>
         <strong
           ><template v-if="target.schema">{{ target.schema }}.</template>{{ target.table }}</strong
         >
         <p>{{ response?.connectionName || target.database }} <em v-if="response?.isProduction">生产</em><span v-if="response && !response.editable">只读</span></p>
       </div>
-      <button class="sql-action" :disabled="!response" type="button" aria-label="在查询页打开" @click="openQuery">⋮</button>
+      <button class="sql-action" :disabled="!response" type="button" aria-label="在查询页打开" @click="openQuery">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></svg>
+      </button>
     </header>
 
     <div class="data-controls">
@@ -648,22 +652,23 @@ onMounted(() => loadPage(0));
       <button type="button" @click="loadPage(response?.offset ?? 0)">重试</button>
     </div>
     <template v-else-if="response">
-      <div class="data-meta">
-        <span>OFFSET {{ response.offset }}</span>
-        <span>{{ response.result.rows.length }} ROWS</span>
-        <span>{{ response.result.execution_time_ms }} MS</span>
-      </div>
-      <div class="result-tools">
-        <button type="button" @click="autoFitColumns">AUTO WIDTH</button>
-        <select v-model="exportFormat" aria-label="表数据导出格式">
-          <option value="csv">CSV</option>
-          <option value="json">JSON</option>
-          <option value="markdown">MARKDOWN</option>
-          <option value="xlsx">EXCEL XLSX</option>
-        </select>
-        <button class="export-action" :disabled="exporting" type="button" @click="sharePage">
-          {{ exporting ? "PREPARING…" : "EXPORT ↗" }}
-        </button>
+      <div class="data-summary">
+        <div class="data-meta">
+          <span>OFFSET {{ response.offset }}</span><i>·</i>
+          <span>{{ response.result.rows.length }} ROWS</span><i>·</i>
+          <span>{{ response.result.execution_time_ms }} MS</span>
+        </div>
+        <div class="result-tools">
+          <select v-model="exportFormat" aria-label="表数据导出格式">
+            <option value="csv">CSV</option>
+            <option value="json">JSON</option>
+            <option value="markdown">MARKDOWN</option>
+            <option value="xlsx">XLSX</option>
+          </select>
+          <button class="export-action" :disabled="exporting" type="button" @click="sharePage">
+            {{ exporting ? "PREPARING…" : "EXPORT" }} <span aria-hidden="true">↗</span>
+          </button>
+        </div>
       </div>
       <p v-if="actionError && !insertOpen && !deleteCandidate" class="action-error" role="alert">{{ actionError }}</p>
       <p v-if="interactionStatus" class="interaction-status" aria-live="polite">{{ interactionStatus }}</p>
@@ -1883,6 +1888,277 @@ button:disabled {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Dense data remains locally scrollable while the page itself stays fixed. */
+.table-data {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+  background: var(--page-background);
+}
+.table-toolbar,
+.table-search,
+.edit-toolbar,
+.data-scroll,
+.transaction-review,
+.cell-sheet {
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.table-search,
+.edit-toolbar,
+.transaction-review,
+.cell-sheet {
+  border-radius: var(--radius-card);
+}
+.data-scroll,
+.delete-confirmation code,
+.cell-editor pre,
+.cell-editor textarea {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.data-scroll th {
+  background: var(--input-background);
+  color: var(--primary);
+}
+.data-scroll td,
+.data-scroll th {
+  border-color: var(--divider-color);
+}
+.transaction-confirm {
+  color: var(--text-secondary);
+}
+.production-transaction-confirm,
+.delete-confirmation {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--divider-color));
+  background: color-mix(in srgb, var(--danger) 6%, var(--card-background));
+}
+.delete-confirmation > strong,
+.delete-confirmation code,
+.delete-confirmation .mutation-error {
+  color: var(--danger);
+}
+.delete-confirmation code {
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--divider-color));
+  background: var(--input-background);
+}
+.cell-sheet > footer .danger-action {
+  background: var(--danger);
+}
+
+/* Table detail — mirrors the compact mobile prototype. */
+.table-data {
+  gap: 8px;
+  padding-bottom: 0;
+}
+.data-toolbar {
+  min-height: 55px;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  border-top: 1px solid var(--divider-color);
+}
+.data-toolbar button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.data-toolbar button svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.data-toolbar .sql-action svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+  stroke: none;
+}
+.data-toolbar > div {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+}
+.data-toolbar strong {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.data-toolbar p {
+  margin: 0;
+  color: var(--primary);
+  font-size: 9px;
+}
+.data-toolbar p em,
+.data-toolbar p span {
+  margin-left: 5px;
+  padding: 1px 4px;
+  font-size: 8px;
+}
+.data-control-bar {
+  gap: 7px;
+}
+.data-control-bar button {
+  min-height: 44px;
+  border-color: var(--divider-color);
+  border-radius: 6px;
+  background: var(--card-background);
+  padding: 0 11px;
+  font-size: 11px;
+}
+.data-control-bar svg {
+  width: 17px;
+  height: 17px;
+}
+.data-summary {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.data-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.data-meta i {
+  color: var(--text-tertiary);
+  font-style: normal;
+}
+.result-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  border: 0;
+  background: transparent;
+}
+.result-tools select,
+.result-tools button {
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--primary);
+  font-size: 9px;
+  font-weight: 700;
+}
+.result-tools select {
+  width: 39px;
+  appearance: none;
+  text-align: right;
+}
+.result-tools .export-action {
+  background: transparent;
+  padding-left: 3px;
+}
+.result-tools .export-action span {
+  margin-left: 2px;
+}
+.data-scroll {
+  height: clamp(250px, 38dvh, 310px);
+  max-height: none;
+  border-radius: 0;
+  background: var(--card-background);
+  scrollbar-color: #c8cdd5 transparent;
+  scrollbar-width: thin;
+}
+.data-scroll table {
+  font-size: 10px;
+}
+.data-scroll .column-heading {
+  min-height: 40px;
+}
+.data-scroll .sort-action {
+  padding: 9px 8px;
+}
+.data-scroll td {
+  height: 40px;
+  padding: 8px;
+}
+.data-scroll th {
+  background: var(--input-background);
+  color: var(--text-primary);
+}
+.table-data > footer {
+  min-height: 55px;
+  border-color: var(--divider-color);
+  border-radius: 6px;
+  background: var(--card-background);
+}
+.page-buttons {
+  gap: 5px;
+  padding: 5px 6px;
+}
+.page-buttons button {
+  width: 43px;
+  min-height: 43px;
+  border-color: var(--divider-color) !important;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.table-data > footer label {
+  justify-content: center;
+  gap: 8px;
+  padding: 0 5px;
+}
+.table-data > footer label span,
+.table-data > footer select {
+  font-size: 10px;
+}
+.table-data > footer select {
+  min-height: 43px;
+  padding: 0 8px;
+}
+.edit-toolbar,
+.edit-toolbar.active {
+  position: static;
+  gap: 8px;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+.edit-toolbar button {
+  min-height: 48px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+.edit-toolbar .save-edits:disabled {
+  border-color: #93bff3;
+  background: #93bff3;
+  color: #fff;
+  opacity: 0.78;
+}
+.edit-blocked {
+  margin: 0;
+}
+@media (max-width: 360px) {
+  .data-meta {
+    gap: 4px;
+    font-size: 8px;
+  }
+  .result-tools select,
+  .result-tools button {
+    font-size: 8px;
+  }
+  .page-buttons button {
+    width: 36px;
   }
 }
 </style>

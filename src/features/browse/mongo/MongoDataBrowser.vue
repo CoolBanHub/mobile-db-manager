@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import InlineSelect from "@/components/InlineSelect.vue";
 import { loadDirectMongoCollections, loadDirectMongoDatabases, loadDirectMongoDocuments, mutateDirectMongo } from "@/lib/direct/mongo";
 import type { MobileConnectionSummary } from "@/lib/mobileTypes";
 
@@ -37,6 +38,11 @@ const visibleDatabases = computed(() => databases.value.filter((name) => !search
 const visibleCollections = computed(() => collections.value.filter((name) => !searchNeedle.value || name === selectedCollection.value || name.toLocaleLowerCase().includes(searchNeedle.value)));
 const visibleDocuments = computed(() => documents.value.filter((document) => !searchNeedle.value || `${documentTitle(document)} ${documentPreview(document)} ${documentIdentity(document)}`.toLocaleLowerCase().includes(searchNeedle.value)));
 const selectedDocumentValue = computed(() => parsedDocument(selectedDocument.value));
+const databaseOptions = computed(() => databases.value.map((name) => ({ value: name, label: name })));
+const collectionOptions = computed(() => collections.value.map((name) => ({
+  value: name,
+  label: `${name}${name === selectedCollection.value ? ` · ${offset.value + documents.value.length}${hasMore.value ? "+" : ""}` : ""}`,
+})));
 
 function handleBack() {
   if (createOpen.value) {
@@ -92,6 +98,14 @@ function showCollections() {
   documents.value = [];
   collectionError.value = "";
   createOpen.value = false;
+}
+
+async function selectDatabase(name: string) {
+  if (name && name !== selectedDatabase.value) await openDatabase(name);
+}
+
+async function selectCollection(name: string) {
+  if (name && name !== selectedCollection.value) await openCollection(name);
 }
 
 function message(reason: unknown, fallback: string) {
@@ -382,6 +396,21 @@ onMounted(loadDatabases);
 
       <div v-if="loading && databases.length === 0" class="mongo-loading"><i></i><strong>正在读取 MongoDB</strong></div>
       <div v-else class="mongo-tree-view" :aria-busy="loading">
+        <div class="mongo-selectors">
+          <label><span>数据库</span><InlineSelect :model-value="selectedDatabase" :options="databaseOptions" ariaLabel="MongoDB 数据库" placeholder="选择数据库" @change="selectDatabase" /></label>
+          <label><span>集合</span><InlineSelect :model-value="selectedCollection" :options="collectionOptions" ariaLabel="MongoDB 集合" placeholder="选择集合" :disabled="!selectedDatabase" @change="selectCollection" /></label>
+          <button :disabled="!selectedCollection" type="button" @click="inspectorTab = 'structure'">结构</button>
+        </div>
+        <div v-if="selectedCollection" class="mongo-list-summary"><span>{{ selectedCollection }} · updatedAt ↓</span><strong>{{ hasMore ? `${offset + documents.length}+` : offset + documents.length }} 个文档</strong></div>
+        <div v-if="selectedCollection" class="prototype-document-list">
+          <button v-for="document in visibleDocuments" :key="documentIdentity(document)" type="button" @click="openDocument(document)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zM14 3v5h4"/><path d="m10 11-2 2 2 2m4-4 2 2-2 2"/></svg>
+            <span><strong>{{ documentTitle(document) }}</strong><small>_id: {{ shortIdentity(document) }}</small></span>
+            <em>{{ documentStatus(document) }}</em>
+          </button>
+          <button v-if="hasMore" class="load-more-document" type="button" @click="changePage(1)">加载更多文档</button>
+          <div v-if="documents.length === 0 && !loading && !collectionError" class="mongo-tree-empty">没有匹配的文档</div>
+        </div>
         <div class="mongo-tree-root">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <rect x="4" y="3" width="16" height="18" rx="2" />
@@ -1283,4 +1312,90 @@ button:disabled {
     transform: rotate(360deg);
   }
 }
+
+.mongo-browser {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+  padding-bottom: var(--space-3);
+}
+.mongo-browser-search,
+.mongo-filter,
+.mongo-tree-view,
+.mongo-inspector,
+.mongo-editor,
+.document-identity {
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.mongo-browser-search,
+.mongo-filter,
+.mongo-tree-view,
+.mongo-inspector,
+.mongo-editor,
+.document-identity {
+  border-radius: var(--radius-card);
+}
+.mongo-tree-node {
+  border-radius: var(--radius-sm);
+}
+.mongo-tree-node:active {
+  background: var(--surface-pressed);
+}
+.mongo-inspector nav button.active {
+  color: var(--primary);
+  box-shadow: inset 0 -2px var(--primary);
+}
+.mongo-editor textarea,
+.mongo-document-summary pre,
+.mongo-structure-summary,
+.document-identity strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.mongo-guard {
+  border-color: color-mix(in srgb, var(--warning) 36%, var(--divider-color));
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--warning) 7%, var(--card-background));
+}
+.mongo-guard:has(input) {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--divider-color));
+  background: color-mix(in srgb, var(--danger) 6%, var(--card-background));
+}
+.mongo-delete {
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--divider-color));
+  background: color-mix(in srgb, var(--danger) 7%, var(--card-background));
+}
+.mongo-browser-search { min-height: 48px; border-radius: var(--radius-card); box-shadow: 0 5px 18px rgba(23, 32, 51, .035); }
+.mongo-browser-search input { min-height: 46px; font-size: 12px; }
+.mongo-filter { padding: var(--space-2); }
+.mongo-tree-view, .mongo-inspector { overflow: hidden; box-shadow: 0 7px 22px rgba(23, 32, 51, .04); }
+.mongo-inspector nav { background: var(--card-background); }
+/* Prototype document list layout */
+.mongo-browser { gap:8px; }
+.mongo-browser-search { min-height:47px; border:1px solid var(--divider-color); border-radius:6px; box-shadow:none; }
+.mongo-browser-search input { min-height:45px; font-size:12px; }
+.mongo-browser-search > button { width:44px; border-left:1px solid var(--divider-color); font-size:0; }
+.mongo-browser-search > button::before { width:16px; height:12px; background:linear-gradient(var(--text-secondary),var(--text-secondary)) 0 0/16px 1px no-repeat,linear-gradient(var(--text-secondary),var(--text-secondary)) 3px 5px/10px 1px no-repeat,linear-gradient(var(--text-secondary),var(--text-secondary)) 6px 10px/4px 1px no-repeat; content:""; }
+.mongo-selectors { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.65fr) auto; gap:8px; }
+.mongo-selectors label { display:grid; gap:6px; color:var(--text-secondary); font-size:10px; }
+.mongo-selectors select,.mongo-selectors > button { min-height:44px; border:1px solid var(--divider-color); border-radius:6px; background:var(--input-background); padding:0 10px; color:var(--text-primary); font:inherit; font-size:11px; }
+.mongo-selectors label:nth-child(2) select { border-color:#e6a000; box-shadow:inset 0 0 0 1px #e6a000; }
+.mongo-selectors > button { align-self:end; background:var(--card-background); color:var(--primary); }
+.mongo-list-summary { display:flex; min-height:43px; align-items:center; justify-content:space-between; border-bottom:1px solid var(--divider-color); padding:0 8px; color:var(--text-secondary); font-size:10px; }
+.mongo-list-summary strong { color:var(--text-primary); font-size:10px; }
+.mongo-tree-root,.mongo-tree { display:none; }
+.prototype-document-list { max-height:calc(100dvh - 315px); overflow:auto; border-bottom:1px solid var(--divider-color); }
+.prototype-document-list > button { display:grid; width:100%; min-height:58px; grid-template-columns:32px minmax(0,1fr) auto; align-items:center; border:0; border-bottom:1px solid var(--divider-color); border-radius:0; background:transparent; padding:7px 9px; text-align:left; }
+.prototype-document-list svg { width:17px; height:17px; fill:none; stroke:var(--primary); stroke-width:1.5; }
+.prototype-document-list span { display:grid; min-width:0; gap:3px; }
+.prototype-document-list strong,.prototype-document-list small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.prototype-document-list strong { font-size:11px; font-weight:600; }
+.prototype-document-list small { color:var(--text-secondary); font-size:9px; }
+.prototype-document-list em { color:#8090aa; font-size:9px; font-style:normal; }
+.prototype-document-list .load-more-document { display:block; color:var(--primary); text-align:center; }
+.mongo-inspector { display:none; }
+.mongo-inspector:has(nav button:nth-child(2).active),.mongo-inspector:has(nav button:nth-child(3).active) { display:block; }
 </style>

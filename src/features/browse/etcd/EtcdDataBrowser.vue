@@ -244,6 +244,11 @@ onMounted(reload);
         </div>
       </div>
 
+      <div v-if="entries.length" class="etcd-prefix-summary">
+        <span>当前前缀 · 按键名排序</span>
+        <strong>已加载 {{ entries.length }} / {{ overview?.keyCount ?? entries.length }}</strong>
+      </div>
+
       <div v-if="loading" class="browser-state">正在读取 etcd 键空间…</div>
       <div v-else-if="entries.length === 0" class="browser-state">没有匹配的键</div>
       <div v-else class="key-tree" role="tree" aria-label="etcd 键空间">
@@ -752,4 +757,79 @@ onMounted(reload);
     padding-left: 8px;
   }
 }
+
+.etcd-browser {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+  padding-bottom: var(--space-3);
+}
+.browser-search,
+.keyspace-view,
+.key-inspector,
+.create-sheet {
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.browser-search,
+.keyspace-view,
+.key-inspector,
+.create-sheet {
+  border-radius: var(--radius-card);
+}
+.tree-node {
+  min-height: var(--control-height-sm);
+  border-radius: var(--radius-sm);
+}
+.tree-node:active {
+  background: var(--surface-pressed);
+}
+.key-inspector nav button.active {
+  color: var(--primary);
+  box-shadow: inset 0 -2px var(--primary);
+}
+.value-inspector textarea,
+.value-inspector pre,
+.metadata-summary dd,
+.tree-label {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.value-inspector textarea,
+.value-inspector pre {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.production-confirm {
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--divider-color));
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--danger) 6%, var(--card-background));
+}
+.detail-actions .danger-action {
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--divider-color));
+  background: color-mix(in srgb, var(--danger) 7%, var(--card-background));
+}
+.browser-search { min-height: 48px; border-radius: var(--radius-card); box-shadow: 0 5px 18px rgba(23, 32, 51, .035); }
+.browser-search input { min-height: 46px; font-size: 12px; }
+.keyspace-view, .key-inspector { overflow: hidden; box-shadow: 0 7px 22px rgba(23, 32, 51, .04); }
+.keyspace-header { background: var(--primary-soft); }
+.key-inspector nav { background: var(--card-background); }
+/* Prototype keyspace layout */
+.etcd-browser { gap:10px; }
+.browser-search { min-height:47px; border:1px solid var(--divider-color); border-radius:6px; box-shadow:none; }
+.browser-search input { min-height:45px; font-size:12px; }
+.browser-search button { width:44px; border-left:1px solid var(--divider-color); }
+.keyspace-view { gap:0; }
+.tree-root-label { min-height:58px; border-bottom:0; padding:0 5px; }
+.tree-root-label > span { color:var(--text-secondary); font-size:10px; }
+.tree-actions button { width:40px; min-height:40px; color:var(--text-secondary); font-size:19px; }
+.etcd-prefix-summary { display:flex; min-height:43px; align-items:center; justify-content:space-between; border-bottom:1px solid var(--divider-color); padding:0 8px; color:var(--text-secondary); font-size:10px; }
+.etcd-prefix-summary strong { color:var(--text-primary); font-size:10px; }
+.key-tree { max-height:calc(100dvh - 305px); }
+.tree-node { min-height:48px; border-bottom:1px solid var(--divider-color); padding-right:8px; }
+.tree-node .tree-label { font-size:10px; }
+.tree-node small { max-width:135px; color:#8090aa; font-size:10px; }
+.tree-node .tree-icon { width:17px; height:17px; }
+.key-inspector { display:none; }
 </style>

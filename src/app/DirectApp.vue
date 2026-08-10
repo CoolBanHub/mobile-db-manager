@@ -3,6 +3,9 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { StatusBar, Style } from "@capacitor/status-bar";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import AppBottomNav from "@/components/AppBottomNav.vue";
+import AppTopBar from "@/components/AppTopBar.vue";
+import PageState from "@/components/PageState.vue";
 import UnsupportedConnectionBrowser from "@/features/browse/UnsupportedConnectionBrowser.vue";
 import EtcdDataBrowser from "@/features/browse/etcd/EtcdDataBrowser.vue";
 import MongoDataBrowser from "@/features/browse/mongo/MongoDataBrowser.vue";
@@ -18,6 +21,7 @@ import { listDirectConnections } from "@/lib/direct/connections";
 import type { MobileConnectionSummary, MobileQueryDraft } from "@/lib/mobileTypes";
 
 type MobileSection = "connections" | "query" | "settings";
+type AppNavigationTarget = "connections" | "browse" | "query" | "settings";
 type InterfaceDensity = "standard" | "compact";
 type UpdateState = "idle" | "checking" | "available" | "current" | "downloading" | "downloaded" | "error";
 type VisibleUpdateState = Exclude<UpdateState, "idle">;
@@ -56,6 +60,10 @@ const headerSubtitle = computed(() => {
     return `${connection.host}:${connection.port}`;
   }
   return { connections: "连接", query: "SQL 工作台", settings: "本机偏好与安全配置" }[activeSection.value];
+});
+const activeNavigationTarget = computed<AppNavigationTarget>(() => {
+  if (activeSection.value === "query" || activeSection.value === "settings") return activeSection.value;
+  return browsingConnection.value ? "browse" : "connections";
 });
 let queryDraftNonce = 0;
 let backButtonListener: PluginListenerHandle | null = null;
@@ -142,6 +150,23 @@ function openQueryFromBrowse() {
     ...context,
     sql: fallbackConnection.dbType === "mongodb" ? "db." : fallbackConnection.dbType === "redis" ? "" : "SELECT 1 AS result;",
   });
+}
+
+function selectNavigation(target: AppNavigationTarget) {
+  if (target === "connections") {
+    browsingConnection.value = null;
+    navigateTo("connections");
+    return;
+  }
+  if (target === "browse") {
+    openBrowse();
+    return;
+  }
+  if (target === "query") {
+    openQueryFromBrowse();
+    return;
+  }
+  navigateTo("settings");
 }
 
 function pagePosition() {
@@ -345,41 +370,23 @@ onBeforeUnmount(() => {
 
     <main class="workspace-view">
       <section class="section-stage" :class="pageMotion ? `page-enter-${pageMotion}` : ''">
-        <header v-if="activeSection !== 'query' && activeSection !== 'settings'" class="app-header" :class="{ 'home-header': activeSection === 'connections' && !browsingConnection }">
-          <button v-if="activeSection === 'connections' && browsingConnection" class="header-back" type="button" aria-label="返回连接列表" @click="browsingConnection = null">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
-          </button>
-          <div class="app-title">
-            <h1>{{ headerTitle }}</h1>
-            <p>{{ headerSubtitle }}</p>
-          </div>
-          <span v-if="browsingConnection?.isProduction" class="header-badge danger">生产</span>
-          <span v-if="browsingConnection?.readOnly" class="header-readonly">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3 5.5 5.8v5.3c0 4.3 2.7 7.7 6.5 9.9 3.8-2.2 6.5-5.6 6.5-9.9V5.8Z" />
-              <path d="M9.5 12.2 11.2 14l3.6-4" />
-            </svg>
-            只读
-          </span>
-          <button v-if="activeSection === 'connections' && !browsingConnection" class="header-action" type="button" aria-label="搜索连接" @click="focusConnectionSearch">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="11" cy="11" r="6" />
-              <path d="m16 16 4 4" />
-            </svg>
-          </button>
-        </header>
+        <AppTopBar
+          v-if="activeSection !== 'query' && activeSection !== 'settings'"
+          :title="headerTitle"
+          :subtitle="headerSubtitle"
+          :can-go-back="activeSection === 'connections' && !!browsingConnection"
+          :home="activeSection === 'connections' && !browsingConnection"
+          :production="browsingConnection?.isProduction"
+          :read-only="browsingConnection?.readOnly"
+          :action-label="activeSection === 'connections' && !browsingConnection ? '搜索连接' : undefined"
+          @back="browsingConnection = null"
+          @action="focusConnectionSearch"
+        />
         <UpdateBanner v-if="visibleUpdateState" :state="visibleUpdateState" :info="updateInfo" :message="updateMessage" @check="checkForUpdates(true)" @download="downloadUpdate" @dismiss="dismissUpdate" />
 
         <div v-if="activeSection === 'connections'">
-          <div v-if="connectionsLoading" class="empty-module compact">
-            <div class="module-icon">⌁</div>
-            <h4>正在解锁本机连接</h4>
-          </div>
-          <div v-else-if="connectionsError" class="empty-module compact">
-            <div class="module-icon">!</div>
-            <h4>{{ connectionsError }}</h4>
-            <button class="inline-action" type="button" @click="loadConnections">重试</button>
-          </div>
+          <PageState v-if="connectionsLoading" compact kind="loading" title="正在读取本机连接" description="安全存储中的连接信息正在加载。" />
+          <PageState v-else-if="connectionsError" compact kind="error" :title="connectionsError" description="请检查本机存储状态后重试。" action-label="重新加载" @action="loadConnections" />
           <template v-else>
             <MetadataBrowser v-if="browsingConnection && browsingMode === 'relational'" ref="metadataBrowser" :connections="[browsingConnection]" @open-query="openQueryDraft" />
             <RedisDataBrowser v-else-if="browsingConnection && browsingMode === 'redis'" ref="redisDataBrowser" :connection="browsingConnection" />
@@ -401,39 +408,6 @@ onBeforeUnmount(() => {
       </section>
     </main>
 
-    <nav class="bottom-nav" aria-label="主导航">
-      <button
-        :class="{ active: activeSection === 'connections' && !browsingConnection }"
-        type="button"
-        @click="
-          browsingConnection = null;
-          navigateTo('connections');
-        "
-      >
-        <svg class="nav-symbol" viewBox="0 0 24 24" aria-hidden="true">
-          <ellipse cx="12" cy="6" rx="6.5" ry="2.5" />
-          <path d="M5.5 6v6c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V6M5.5 12v6c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5v-6" />
-        </svg>
-        <span>连接</span>
-      </button>
-      <button :class="{ active: activeSection === 'connections' && !!browsingConnection }" type="button" @click="openBrowse">
-        <svg class="nav-symbol" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M3.5 6.5h6l2 2h9v10.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19Z" />
-          <path d="M3.5 9h17" />
-        </svg>
-        <span>浏览</span>
-      </button>
-      <button :class="{ active: activeSection === 'query' }" type="button" @click="openQueryFromBrowse">
-        <svg class="nav-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 4 5-4 5M13 18h6" /></svg>
-        <span>查询</span>
-      </button>
-      <button :class="{ active: activeSection === 'settings' }" type="button" @click="navigateTo('settings')">
-        <svg class="nav-symbol" viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
-        </svg>
-        <span>设置</span>
-      </button>
-    </nav>
+    <AppBottomNav :active="activeNavigationTarget" @select="selectNavigation" />
   </div>
 </template>

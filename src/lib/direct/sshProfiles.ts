@@ -1,8 +1,8 @@
 import type { MobileSshProfileDraft, MobileSshProfileSummary } from "../mobileTypes";
 import { DirectDatabase, requireNative } from "./native";
 
-// WebView 只处理不含秘密的摘要和用户本次主动输入的草稿。读取接口永远不会返回
-// 已保存的密码、私钥或口令；编辑时空值由原生保险箱解释为“沿用旧值”。
+// WebView 只处理不含秘密的摘要和用户本次主动输入的密码。私钥由独立密钥库
+// 通过 keyId 引用；读取接口永远不会返回已保存的密码或私钥。
 export async function listSshProfiles(): Promise<MobileSshProfileSummary[]> {
   requireNative();
   return (await DirectDatabase.listSshProfiles()).value;

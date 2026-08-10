@@ -5,6 +5,8 @@ import type {
   MobileConnectionSummary,
   MobileSshProfileDraft,
   MobileSshProfileSummary,
+  MobileSshKeyDraft,
+  MobileSshKeySummary,
   QueryResult,
 } from "../mobileTypes";
 
@@ -17,6 +19,10 @@ export interface DirectDatabasePlugin {
   getSshProfile(options: { id: string }): Promise<NativeResult<MobileSshProfileSummary>>;
   saveSshProfile(options: { profile: MobileSshProfileDraft }): Promise<NativeResult<MobileSshProfileSummary>>;
   deleteSshProfile(options: { id: string }): Promise<NativeResult<{ ok: boolean }>>;
+  listSshKeys(): Promise<NativeResult<MobileSshKeySummary[]>>;
+  saveSshKey(options: { key: MobileSshKeyDraft }): Promise<NativeResult<MobileSshKeySummary>>;
+  deleteSshKey(options: { id: string }): Promise<NativeResult<{ ok: boolean }>>;
+  importSshKeyFile(options: { id?: string; name: string; passphrase: string }): Promise<NativeResult<MobileSshKeySummary>>;
   listConnections(): Promise<NativeResult<MobileConnectionSummary[]>>;
   getConnection(options: { id: string }): Promise<NativeResult<MobileConnectionEditor>>;
   saveConnection(options: { connection: MobileConnectionDraft }): Promise<NativeResult<MobileConnectionSummary>>;

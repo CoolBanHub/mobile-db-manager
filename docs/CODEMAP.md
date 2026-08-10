@@ -14,7 +14,7 @@
 | 要改的功能 | 前端页面 | 前端 API / 工具 | Android 原生 |
 | --- | --- | --- | --- |
 | 连接列表、连接表单、收藏、分组、搜索 | `src/features/connections/ConnectionManager.vue` | `src/lib/direct/connections.ts`、`src/lib/connectionPreferences.ts` | `DirectConnectionStore.java`、`SecureVaultStore.java`、`DirectConnectionValidator.java` |
-| 设置页、可复用 SSH 配置 | `src/features/settings/SettingsPage.vue` | `src/lib/direct/sshProfiles.ts` | `DirectSshProfileStore.java`、`SecureVaultStore.java` |
+| 设置页、SSH 跳板机与独立密钥库 | `src/features/settings/SettingsPage.vue` | `src/lib/direct/sshProfiles.ts`、`src/lib/direct/sshKeys.ts` | `DirectSshProfileStore.java`、`DirectSshKeyStore.java`、`SecureVaultStore.java` |
 | PostgreSQL / MySQL / SQL Server 元数据浏览 | `src/features/browse/relational/MetadataBrowser.vue` | `src/lib/direct/metadata.ts`、`src/lib/databaseCapabilities.ts` | `DirectJdbcMetadata.java`、`DirectJdbcConnectionFactory.java` |
 | 关系型表数据浏览和安全事务增删改 | `src/features/browse/relational/TableDataBrowser.vue` | `src/lib/direct/tableData.ts` | `DirectJdbcTableTransaction.java`、`DirectJdbcQueryRunner.java`、`DirectJdbcConnectionFactory.java` |
 | SQL 工作台、查询 Tab、执行、取消、Explain | `src/features/query/QueryWorkbench.vue` | `src/lib/direct/query.ts`、`src/lib/sqlEditor.ts`、`src/lib/sqlParameters.ts` | `DirectJdbcQueryRunner.java`、`DirectSqlSafety.java` |
@@ -24,7 +24,7 @@
 | Redis Key 浏览、详情、TTL、固定写入动作 | `src/features/browse/redis/RedisDataBrowser.vue` | `src/lib/direct/redis.ts` | `DirectRedisActions.java`、`DirectRedisConnection.java` |
 | MongoDB 数据库、集合、文档浏览和编辑 | `src/features/browse/mongo/MongoDataBrowser.vue` | `src/lib/direct/mongo.ts` | `DirectMongoActions.java`、`DirectMongoConnection.java` |
 | etcd 前缀浏览、键详情、put/delete | `src/features/browse/etcd/EtcdDataBrowser.vue` | `src/lib/direct/etcd.ts` | `DirectEtcdActions.java`、`DirectEtcdConnection.java` |
-| SSH 隧道、HTTP CONNECT 代理、路由清理 | 连接表单相关 UI | 连接配置字段、`src/lib/direct/sshProfiles.ts` | `DirectTransport.java`、`DirectSshProfileStore.java` |
+| SSH 隧道、密钥引用、HTTP CONNECT 代理、路由清理 | 连接表单相关 UI | 连接配置字段、`src/lib/direct/sshProfiles.ts`、`src/lib/direct/sshKeys.ts` | `DirectTransport.java`、`DirectSshProfileStore.java`、`DirectSshKeyStore.java` |
 | Capacitor 插件入口、参数读取、统一错误返回 | 调用方组件 | `src/lib/direct/native.ts` | `DirectDatabasePlugin.java`、`DirectErrors.java` |
 | 移动键盘适配 | `src/app/DirectApp.vue` 和输入组件 | `src/lib/mobileKeyboard.ts` | `MobileKeyboardPlugin.java` |
 | GitHub Release 自动更新和 APK 下载 | `src/features/update/UpdateBanner.vue`、`src/app/DirectApp.vue` | `src/lib/appUpdate.ts` | `AppUpdatePlugin.java`、`AppReleaseUpdateService.java`、`AppUpdateVersion.java` |
@@ -70,7 +70,7 @@
 | MongoDB 某个集合无法读取 | `MongoDataBrowser.vue`、`DirectMongoActions.java`、`DirectMongoConnection.java` |
 | etcd 前缀查询结果不对或二进制值被破坏 | `EtcdDataBrowser.vue`、`DirectEtcdActions.java`、`DirectEtcdConnection.java` |
 | SSH/HTTP 代理连接后没有释放 | `DirectTransport.java` |
-| 已保存 SSH 配置无法选择或凭据状态异常 | `SettingsPage.vue`、`sshProfiles.ts`、`DirectSshProfileStore.java` |
+| 已保存 SSH 跳板机/密钥无法选择、迁移或凭据状态异常 | `SettingsPage.vue`、`sshProfiles.ts`、`sshKeys.ts`、`DirectSshProfileStore.java`、`DirectSshKeyStore.java` |
 | GitHub Release 没有 APK 或应用内更新找不到新版 | `.github/workflows/android-release.yml`、`AppReleaseUpdateService.java`、`src/lib/appUpdate.ts` |
 
 ## 约定

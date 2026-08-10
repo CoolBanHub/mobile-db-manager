@@ -32,11 +32,17 @@ SSH tunnel, HTTP CONNECT proxy.
   the device. Classify and filter connections with consistent pale-blue
   Development, Staging, and Production environment labels; new connections
   default to Development.
-- Pre-save and manage reusable SSH jump-host profiles from Settings. Database
-  connections reference only a profile ID; database passwords, connection
-  strings, proxy passwords, SSH passwords, and private keys are protected with
-  Android Keystore AES-GCM encryption and never returned to the WebView.
-- Open interface density, SSH jump hosts, privacy and security, and About as
+- Manage reusable SSH jump hosts and a separate SSH key library from Settings.
+  A jump host can use a password or reference a key by `keyId`, while database
+  connections still reference only the jump-host ID. Android's document picker
+  imports OpenSSH/PEM key files directly into native storage, validates the key
+  and passphrase, and calculates its public-key SHA256 fingerprint without
+  returning private-key file content to the WebView.
+- Database passwords, connection strings, proxy passwords, SSH passwords,
+  private keys, and passphrases use Android Keystore AES-GCM encryption. A key
+  referenced by a jump host, or a jump host referenced by a connection, cannot
+  be accidentally deleted.
+- Open interface density, SSH jump hosts, SSH keys, privacy and security, and About as
   focused subpages from the Settings index. Android Back returns to the Settings
   index first, and the app uses a fixed light interface.
 - Browse metadata, run SQL queries, and edit table data for PostgreSQL,
@@ -142,7 +148,7 @@ For a detailed feature-to-file index, see [Code Map](docs/CODEMAP.md).
 Frontend pages live in `src/features/`:
 
 - `connections/`: connection management.
-- `settings/`: local preferences and reusable SSH profile management.
+- `settings/`: local preferences, SSH jump hosts, and reusable SSH key management.
 - `query/`: SQL workbench, history, and saved SQL.
 - `browse/relational/`: relational metadata and table data browser.
 - `browse/redis/`, `browse/mongo/`, `browse/etcd/`: database-specific browsers.
@@ -152,6 +158,7 @@ Frontend direct database APIs live in `src/lib/direct/`:
 
 - `connections.ts`: connection list, save, delete, and test.
 - `sshProfiles.ts`: reusable SSH profile list, save, and delete.
+- `sshKeys.ts`: reusable SSH key import, list, save, and delete.
 - `metadata.ts`: databases, schemas, tables, columns, indexes, and other
   metadata.
 - `query.ts`: SQL execution, cancellation, and Explain.
@@ -182,9 +189,10 @@ Android native direct-connect code lives in
 - `DirectRedisConnection.java`, `DirectMongoConnection.java`,
   `DirectEtcdConnection.java`: low-level database clients.
 - `DirectTransport.java`: SSH forwarding and HTTP CONNECT tunnels.
-- `DirectConnectionStore.java`, `DirectSshProfileStore.java`, and
-  `SecureVaultStore.java`: connection profiles, reusable SSH profiles, and
-  secret storage.
+- `DirectConnectionStore.java`, `DirectSshProfileStore.java`,
+  `DirectSshKeyStore.java`, and `SecureVaultStore.java`: connection profiles,
+  jump hosts, reusable SSH keys, and secret storage. Legacy keys embedded in a
+  jump-host record migrate on first read without changing the jump-host ID.
 - `AppUpdatePlugin.java`, `AppReleaseUpdateService.java`, `AppUpdateVersion.java`:
   GitHub Release checks, APK downloads, and version comparison.
 

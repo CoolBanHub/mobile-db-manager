@@ -1,14 +1,24 @@
 package com.coolbanhub.mobiledbmanager;
 
+import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+
+import androidx.activity.result.ActivityResult;
+
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Properties;
@@ -28,11 +38,16 @@ public class DirectDatabasePlugin extends Plugin {
         return new DirectSshProfileStore(getContext());
     }
 
+    private DirectSshKeyStore sshKeys() {
+        return new DirectSshKeyStore(getContext());
+    }
+
     @PluginMethod
     public void listSshProfiles(PluginCall call) {
         run(call, () -> {
             JSArray result = new JSArray();
-            for (JSONObject profile : sshProfiles().all()) result.put(DirectSshProfileStore.summary(profile));
+            DirectSshProfileStore profiles = sshProfiles();
+            for (JSONObject profile : profiles.all()) result.put(profiles.summary(profile));
             return result;
         });
     }
@@ -42,14 +57,16 @@ public class DirectDatabasePlugin extends Plugin {
         run(call, () -> {
             JSONObject profile = sshProfiles().get(DirectJson.required(call.getString("id"), "id"));
             if (profile == null) throw new IllegalArgumentException("SSH 配置不存在");
-            return DirectSshProfileStore.summary(profile);
+            return sshProfiles().summary(profile);
         });
     }
 
     @PluginMethod
     public void saveSshProfile(PluginCall call) {
-        run(call, () -> DirectSshProfileStore.summary(
-                sshProfiles().save(DirectJson.requiredObject(call, "profile"))));
+        run(call, () -> {
+            DirectSshProfileStore profiles = sshProfiles();
+            return profiles.summary(profiles.save(DirectJson.requiredObject(call, "profile")));
+        });
     }
 
     @PluginMethod
@@ -64,6 +81,86 @@ public class DirectDatabasePlugin extends Plugin {
             if (!sshProfiles().remove(id)) throw new IllegalArgumentException("SSH 配置不存在");
             return new JSObject().put("ok", true);
         });
+    }
+
+    @PluginMethod
+    public void listSshKeys(PluginCall call) {
+        run(call, () -> {
+            JSArray result = new JSArray();
+            DirectSshProfileStore profiles = sshProfiles();
+            for (JSONObject key : sshKeys().all()) {
+                JSObject summary = DirectSshKeyStore.summary(key);
+                summary.put("usageCount", profiles.countProfilesUsingKey(key.optString("id")));
+                result.put(summary);
+            }
+            return result;
+        });
+    }
+
+    @PluginMethod
+    public void saveSshKey(PluginCall call) {
+        run(call, () -> DirectSshKeyStore.summary(
+                sshKeys().save(DirectJson.requiredObject(call, "key"))));
+    }
+
+    @PluginMethod
+    public void deleteSshKey(PluginCall call) {
+        run(call, () -> {
+            String id = DirectJson.required(call.getString("id"), "id");
+            String profileName = sshProfiles().firstProfileUsingKey(id);
+            if (profileName != null) {
+                throw new IllegalArgumentException("该 SSH 密钥正被跳板机“" + profileName + "”使用");
+            }
+            if (!sshKeys().remove(id)) throw new IllegalArgumentException("SSH 密钥不存在");
+            return new JSObject().put("ok", true);
+        });
+    }
+
+    /** Opens Android's document picker; selected private-key bytes never enter the WebView. */
+    @PluginMethod
+    public void importSshKeyFile(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(call, intent, "handleSshKeyFile");
+    }
+
+    @ActivityCallback
+    private void handleSshKeyFile(PluginCall call, ActivityResult activityResult) {
+        if (call == null) return;
+        if (activityResult.getResultCode() != Activity.RESULT_OK
+                || activityResult.getData() == null
+                || activityResult.getData().getData() == null) {
+            call.reject("未选择 SSH 私钥文件");
+            return;
+        }
+        Uri uri = activityResult.getData().getData();
+        run(call, () -> {
+            String privateKey = readPrivateKey(uri);
+            JSONObject incoming = new JSONObject()
+                    .put("name", DirectJson.required(call.getString("name"), "SSH 密钥名称"))
+                    .put("privateKey", privateKey)
+                    .put("privateKeyPassphrase", call.getString("passphrase", ""));
+            String id = call.getString("id", "").trim();
+            if (!id.isEmpty()) incoming.put("id", id);
+            return DirectSshKeyStore.summary(sshKeys().save(incoming));
+        });
+    }
+
+    private String readPrivateKey(Uri uri) throws Exception {
+        try (InputStream input = getContext().getContentResolver().openInputStream(uri);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            if (input == null) throw new IllegalArgumentException("无法读取 SSH 私钥文件");
+            byte[] buffer = new byte[8192];
+            int total = 0;
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                total += read;
+                if (total > 256 * 1024) throw new IllegalArgumentException("SSH 私钥文件不能超过 256 KB");
+                output.write(buffer, 0, read);
+            }
+            return new String(output.toByteArray(), StandardCharsets.UTF_8);
+        }
     }
 
     @PluginMethod

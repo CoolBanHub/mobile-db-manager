@@ -41,7 +41,7 @@ function formatSize(bytes: number) {
 </script>
 
 <template>
-  <aside class="update-banner" :data-state="state">
+  <aside class="update-banner" :data-state="state" role="status" aria-live="polite">
     <div class="update-mark" aria-hidden="true">
       <svg v-if="state === 'available' || state === 'downloading'" viewBox="0 0 24 24">
         <path d="M12 3v11" />
@@ -56,7 +56,10 @@ function formatSize(bytes: number) {
         <path d="M12 17h.01" />
         <path d="M10.3 3.8 2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z" />
       </svg>
-      <span v-else>...</span>
+      <svg v-else class="update-spinner" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8" />
+        <path d="M12 4a8 8 0 0 1 8 8" />
+      </svg>
     </div>
     <div class="update-copy">
       <h3>{{ title }}</h3>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import QueryResultPanel from "./QueryResultPanel.vue";
 import { isMobileSqlDatabase } from "@/lib/databaseCapabilities";
 import { loadDirectMetadata } from "@/lib/direct/metadata";
 import { loadDirectMongoCollections, loadDirectMongoDatabases } from "@/lib/direct/mongo";
@@ -1163,87 +1164,30 @@ defineExpose({ handleBack });
         </button>
       </div>
     </section>
-    <section v-if="activeResultTab === 'result' && result" class="result-panel">
-      <header>
-        <div class="result-metrics">
-          <strong>✓ 执行成功</strong>
-          <span>{{ resultStatusText }} · {{ result.execution_time_ms }} ms</span>
-          <em v-if="result.has_more">MORE</em>
-        </div>
-        <div v-if="result.columns.length" class="result-actions">
-          <button type="button" :disabled="executing" aria-label="刷新结果" title="刷新结果" @click="refreshResult">↻</button>
-          <button type="button" aria-label="复制结果" title="复制结果" @click="copyResultTable">▣</button>
-          <button class="export-action" :disabled="exporting" type="button" :aria-label="`导出并分享 ${exportFormat.toUpperCase()} 查询结果`" title="导出结果" @click="shareResult">⇩</button>
-          <details class="result-more">
-            <summary aria-label="更多结果操作">⋮</summary>
-            <div>
-              <label>
-                导出格式
-                <select v-model="exportFormat" aria-label="查询结果导出格式">
-                  <option value="csv">CSV</option>
-                  <option value="json">JSON</option>
-                  <option value="markdown">MARKDOWN</option>
-                  <option value="xlsx">EXCEL XLSX</option>
-                </select>
-              </label>
-              <button v-if="pendingCellEdits.length" type="button" @click="buildPendingUpdateSql">生成修改 SQL（{{ pendingCellEdits.length }}）</button>
-              <button v-if="chartRows.length" type="button" @click="showChart = !showChart">{{ showChart ? "显示表格" : "显示图表" }}</button>
-              <button type="button" @click="autoFitColumns">自动调整列宽</button>
-            </div>
-          </details>
-        </div>
-      </header>
-      <p v-if="exportStatus" class="export-status" aria-live="polite">{{ exportStatus }}</p>
-      <div v-if="showChart && chartRows.length" class="query-chart">
-        <article v-for="(item, index) in chartRows" :key="index">
-          <span :title="item.label">{{ item.label }}</span>
-          <i><b :style="{ width: `${item.width}%` }"></b></i>
-          <strong>{{ item.value }}</strong>
-        </article>
-      </div>
-      <div v-if="result.columns.length && !showChart" class="result-scroll">
-        <table>
-          <colgroup>
-            <col v-for="(_, index) in result.columns" :key="index" :style="{ width: `${columnWidths[index] ?? 160}px` }" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th v-for="(column, index) in result.columns" :key="`${column}:${index}`">
-                <div>
-                  <span>{{ column }}</span
-                  ><i aria-hidden="true">↕</i>
-                </div>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(row, rowIndex) in result.rows" :key="resultOffset + rowIndex">
-              <td v-for="(_, index) in result.columns" :key="index" :class="{ null: row[index] === null }">
-                <button
-                  :class="{
-                    'status-value': result.columns[index].toLocaleLowerCase() === 'status' && ['active', 'paid', 'success', 'enabled'].includes(String(row[index]).toLocaleLowerCase()),
-                  }"
-                  type="button"
-                  @click="openCell(rowIndex, index, row[index])"
-                >
-                  {{ displayValue(row[index]) }}
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p v-else>执行成功，{{ resultStatusText }}。</p>
-      <footer v-if="result.columns.length">
-        <div>
-          <button :disabled="executing || resultOffset === 0" aria-label="第一页" @click="executePage(0)">|‹</button>
-          <button :disabled="executing || resultOffset === 0" aria-label="上一页" @click="executePage(Math.max(0, resultOffset - QUERY_PAGE_SIZE))">‹</button>
-          <span>第 {{ resultPage }} 页</span>
-          <button :disabled="executing || !result.has_more" aria-label="下一页" @click="executePage(resultOffset + QUERY_PAGE_SIZE)">›</button>
-        </div>
-        <small>{{ QUERY_PAGE_SIZE }} / 页</small>
-      </footer>
-    </section>
+    <QueryResultPanel
+      v-if="activeResultTab === 'result' && result"
+      :result="result"
+      :status-text="resultStatusText"
+      :executing="executing"
+      :exporting="exporting"
+      :export-status="exportStatus"
+      v-model:export-format="exportFormat"
+      :pending-edit-count="pendingCellEdits.length"
+      :chart-rows="chartRows"
+      :show-chart="showChart"
+      :column-widths="columnWidths"
+      :result-offset="resultOffset"
+      :result-page="resultPage"
+      :page-size="QUERY_PAGE_SIZE"
+      @refresh="refreshResult"
+      @copy="copyResultTable"
+      @export="shareResult"
+      @build-update-sql="buildPendingUpdateSql"
+      @toggle-chart="showChart = !showChart"
+      @auto-fit="autoFitColumns"
+      @open-cell="openCell"
+      @page="executePage"
+    />
     <div v-if="selectedCell && result" class="cell-detail-backdrop" role="presentation" @click.self="selectedCell = null">
       <section class="cell-detail" role="dialog" aria-modal="true" aria-labelledby="cell-detail-title">
         <header>
@@ -2696,5 +2640,141 @@ td.null {
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 8px 9px;
+}
+
+/* Prototype-aligned mobile query workspace. Result rendering lives in
+   QueryResultPanel; this component retains execution and safety state. */
+.query-workbench {
+  min-width: 0;
+  max-width: 100%;
+  gap: var(--space-2);
+  margin-top: 0;
+  padding-bottom: var(--space-3);
+}
+.query-connection-bar,
+.context-path,
+.editor,
+.message-panel,
+.explain-panel,
+.query-builder {
+  min-width: 0;
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.query-connection-bar,
+.context-path,
+.editor,
+.message-panel,
+.explain-panel,
+.query-builder {
+  border-radius: var(--radius-card);
+}
+.query-connection-bar {
+  min-height: var(--topbar-height);
+  box-shadow: 0 5px 18px rgba(23, 32, 51, 0.045);
+}
+.context-path {
+  min-height: var(--control-height);
+  overflow: hidden;
+}
+.context-path select {
+  min-width: 0;
+  background: var(--input-background);
+}
+.query-tabs {
+  min-width: 0;
+  max-width: 100%;
+  border-color: var(--divider-color);
+  background: var(--card-background);
+  scrollbar-width: thin;
+}
+.query-tabs button {
+  min-height: var(--control-height-sm);
+}
+.query-tabs button.active,
+.result-tabs button.active {
+  color: var(--primary);
+  box-shadow: inset 0 -2px var(--primary);
+}
+.editor {
+  overflow: hidden;
+  box-shadow: 0 5px 18px rgba(23, 32, 51, 0.045);
+}
+.query-toolbar,
+.editor-tools,
+.result-tabs {
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.query-toolbar button {
+  min-height: var(--control-height-sm);
+  border-radius: var(--radius-sm);
+}
+.code-editor,
+.editor-input,
+.editor-input textarea,
+.sql-highlight,
+.parameter-editor textarea,
+.explain-panel pre {
+  min-width: 0;
+  max-width: 100%;
+}
+.code-editor,
+.editor-input,
+.editor-input textarea,
+.sql-highlight {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.advanced-guard {
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--divider-color));
+  background: color-mix(in srgb, var(--warning) 7%, var(--card-background));
+}
+.advanced-guard:has(> input) {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--divider-color));
+  background: color-mix(in srgb, var(--danger) 6%, var(--card-background));
+}
+.advanced-guard > input {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--divider-color));
+  background: var(--input-background);
+}
+.result-tabs {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.message-panel strong {
+  color: var(--success);
+}
+.explain-panel pre {
+  overflow-x: auto;
+  background: var(--input-background);
+}
+.cell-detail {
+  width: min(100%, var(--content-max-width));
+  border-color: var(--divider-color);
+  border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
+  background: var(--card-background);
+}
+.cell-detail pre,
+.cell-edit-input {
+  max-width: 100%;
+  overflow-x: auto;
+  background: var(--input-background);
+}
+@media (max-width: 360px) {
+  .query-connection-bar > button:not(.query-back):not(:last-child) {
+    display: none;
+  }
+  .query-toolbar button span {
+    display: none;
+  }
+  .query-toolbar > i {
+    display: none;
+  }
+  .result-tabs button {
+    padding-inline: 9px;
+  }
 }
 </style>

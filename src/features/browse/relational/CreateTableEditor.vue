@@ -294,4 +294,43 @@ function openQuery() {
 .definition-footer button.primary { border: 0; background: var(--acid); color: #fff; font-weight: 700; }
 .definition-footer button:disabled { opacity: .45; }
 @media (max-width: 560px) { .definition-card, .definition-card.foreign-grid { grid-template-columns: 1fr; } .column-comments { grid-template-columns: 1fr; } .definition-footer { grid-template-columns: 1fr 1.35fr; } .definition-footer span { grid-column: 1 / -1; } }
+
+.definition-sheet {
+  min-width: 0;
+  max-width: min(100%, var(--content-max-width));
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.definition-header,
+.definition-tabs,
+.definition-footer {
+  border-color: var(--divider-color);
+  background: color-mix(in srgb, var(--card-background) 95%, transparent);
+}
+.definition-card,
+.column-grid-scroll,
+.preview-panel pre {
+  border-color: var(--divider-color);
+  border-radius: var(--radius-card);
+  background: var(--card-background);
+}
+.column-grid-scroll,
+.preview-panel pre {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.definition-tabs button.active {
+  color: var(--primary);
+  box-shadow: inset 0 -2px var(--primary);
+}
+.validation-errors {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 6%, var(--card-background));
+}
+.definition-footer {
+  right: max(0px, calc((100vw - var(--content-max-width)) / 2));
+  left: max(0px, calc((100vw - var(--content-max-width)) / 2));
+  padding-bottom: calc(var(--space-2) + var(--page-bottom-safe));
+}
 </style>

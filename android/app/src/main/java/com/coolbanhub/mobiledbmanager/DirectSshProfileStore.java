@@ -23,10 +23,12 @@ final class DirectSshProfileStore {
 
     private final Context context;
     private final SecureVaultStore vault;
+    private final DirectSshKeyStore keys;
 
     DirectSshProfileStore(Context context) {
         this.context = context.getApplicationContext();
         this.vault = new SecureVaultStore(this.context);
+        this.keys = new DirectSshKeyStore(this.context);
     }
 
     private SharedPreferences preferences() {
@@ -45,7 +47,24 @@ final class DirectSshProfileStore {
 
     JSONObject get(String id) throws Exception {
         String raw = vault.get(VAULT_PREFIX + id);
-        return raw == null ? null : new JSONObject(raw);
+        if (raw == null) return null;
+        JSONObject profile = new JSONObject(raw);
+        // 旧版本把私钥嵌在跳板机记录中。首次读取时迁移到独立密钥库，跳板机 ID
+        // 保持不变，因此已有数据库连接无需修改即可继续使用。
+        if ("private-key".equals(profile.optString("authMethod"))
+                && profile.optString("keyId").isEmpty()
+                && !profile.optString("privateKey").isEmpty()) {
+            JSONObject key = keys.saveLegacy(
+                    id,
+                    profile.optString("name", "SSH") + " 密钥",
+                    profile.optString("privateKey"),
+                    profile.optString("privateKeyPassphrase"));
+            profile.put("keyId", key.optString("id"));
+            profile.remove("privateKey");
+            profile.remove("privateKeyPassphrase");
+            vault.put(VAULT_PREFIX + id, profile.toString());
+        }
+        return profile;
     }
 
     JSONObject save(JSONObject incoming) throws Exception {
@@ -64,14 +83,19 @@ final class DirectSshProfileStore {
         }
         merged.put("id", id);
         validate(merged);
+        if ("private-key".equals(merged.optString("authMethod"))
+                && keys.get(merged.optString("keyId")) == null) {
+            throw new IllegalArgumentException("选择的 SSH 密钥不存在，请刷新后重试");
+        }
         // 切换认证方式时主动清理不再使用的凭据。空字符串通常表示“沿用旧值”，
         // 因此必须在合并完成后清理，避免保险箱长期保留无用途的旧密码或私钥。
         if ("password".equals(merged.optString("authMethod"))) {
-            merged.remove("privateKey");
-            merged.remove("privateKeyPassphrase");
+            merged.remove("keyId");
         } else {
             merged.remove("password");
         }
+        merged.remove("privateKey");
+        merged.remove("privateKeyPassphrase");
         vault.put(VAULT_PREFIX + id, merged.toString());
         Set<String> ids = new LinkedHashSet<>(preferences().getStringSet(IDS, Collections.emptySet()));
         ids.add(id);
@@ -104,12 +128,18 @@ final class DirectSshProfileStore {
         effective.put("sshHostKeyFingerprint", profile.optString("hostKeyFingerprint"));
         effective.put("sshAuthMethod", profile.optString("authMethod", "password"));
         effective.put("sshPassword", profile.optString("password"));
-        effective.put("sshPrivateKey", profile.optString("privateKey"));
-        effective.put("sshPrivateKeyPassphrase", profile.optString("privateKeyPassphrase"));
+        if ("private-key".equals(profile.optString("authMethod"))) {
+            JSONObject key = keys.get(profile.optString("keyId"));
+            if (key == null) throw new IllegalArgumentException("跳板机引用的 SSH 密钥不存在，请在设置中重新选择");
+            effective.put("sshPrivateKey", key.optString("privateKey"));
+            effective.put("sshPrivateKeyPassphrase", key.optString("privateKeyPassphrase"));
+        }
         return effective;
     }
 
-    static JSObject summary(JSONObject profile) {
+    JSObject summary(JSONObject profile) throws Exception {
+        String keyId = profile.optString("keyId");
+        JSONObject key = keyId.isEmpty() ? null : keys.get(keyId);
         return new JSObject()
                 .put("id", profile.optString("id"))
                 .put("name", profile.optString("name"))
@@ -119,8 +149,8 @@ final class DirectSshProfileStore {
                 .put("hostKeyFingerprint", profile.optString("hostKeyFingerprint"))
                 .put("authMethod", profile.optString("authMethod", "password"))
                 .put("hasPassword", !profile.optString("password").isEmpty())
-                .put("hasPrivateKey", !profile.optString("privateKey").isEmpty())
-                .put("hasPrivateKeyPassphrase", !profile.optString("privateKeyPassphrase").isEmpty());
+                .put("keyId", keyId)
+                .put("keyName", key == null ? "" : key.optString("name"));
     }
 
     static void validate(JSONObject profile) {
@@ -131,11 +161,11 @@ final class DirectSshProfileStore {
                 profile.optString("username"),
                 profile.optString("authMethod", "password"),
                 profile.optString("password"),
-                profile.optString("privateKey"));
+                profile.optString("keyId"));
     }
 
     static void validateFields(String name, String host, int port, String username,
-                               String method, String password, String privateKey) {
+                               String method, String password, String keyId) {
         DirectJson.required(name, "SSH 配置名称");
         DirectJson.required(host, "SSH 主机");
         DirectJson.required(username, "SSH 用户名");
@@ -148,9 +178,24 @@ final class DirectSshProfileStore {
         if (method.equals("password") && password.isEmpty()) {
             throw new IllegalArgumentException("密码认证需要填写 SSH 密码");
         }
-        if (method.equals("private-key") && privateKey.isEmpty()) {
-            throw new IllegalArgumentException("私钥认证需要填写 OpenSSH 或 PEM 私钥");
+        if (method.equals("private-key") && keyId.isEmpty()) {
+            throw new IllegalArgumentException("私钥认证需要选择 SSH 密钥");
         }
+    }
+
+    String firstProfileUsingKey(String keyId) throws Exception {
+        for (JSONObject profile : all()) {
+            if (keyId.equals(profile.optString("keyId"))) return profile.optString("name");
+        }
+        return null;
+    }
+
+    int countProfilesUsingKey(String keyId) throws Exception {
+        int count = 0;
+        for (JSONObject profile : all()) {
+            if (keyId.equals(profile.optString("keyId"))) count++;
+        }
+        return count;
     }
 
     private static boolean isSecret(String name) {

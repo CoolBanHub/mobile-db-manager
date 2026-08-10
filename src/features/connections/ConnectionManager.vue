@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from "vue";
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import PageState from "@/components/PageState.vue";
 import postgresIcon from "@/assets/database-icons/postgres.svg";
 import redisIcon from "@/assets/database-icons/redis.svg";
 import mongodbIcon from "@/assets/database-icons/mongodb.svg";
@@ -24,7 +26,7 @@ const favoritesOnly = ref(false);
 const collapsedGroups = ref(new Set<string>());
 const editorOpen = ref(false);
 const advancedOpen = ref(false);
-const editorTab = ref<"general" | "ssl" | "ssh" | "http">("general");
+const editorStep = ref<1 | 2 | 3 | 4>(1);
 const saving = ref(false);
 const testing = ref(false);
 const editorMessage = ref("");
@@ -35,6 +37,7 @@ const preferenceRevision = ref(0);
 const hasStoredConnectionString = ref(false);
 const sshProfiles = ref<MobileSshProfileSummary[]>([]);
 const sshProfilesError = ref("");
+const deleteCandidate = ref<MobileConnectionSummary | null>(null);
 const sslCertificateError = computed(() => editorTone.value === "danger" && editorMessage.value.startsWith("SSL 证书验证失败"));
 
 const databaseTypes = mobileDatabaseCapabilities;
@@ -86,6 +89,13 @@ const draft = reactive<MobileConnectionDraft>(blankDraft());
 const currentCapability = computed(() => databaseCapability(draft.dbType));
 const selectedSshProfile = computed(() => sshProfiles.value.find((profile) => profile.id === draft.sshProfileId) ?? null);
 const preferenceEnvironment = ref<ConnectionEnvironment>("development");
+const activeFilterCount = computed(() => (environment.value === "all" ? 0 : 1) + (favoritesOnly.value ? 1 : 0));
+const editorStepCopy = computed(() => [
+  { label: "基本", description: "类型与用途" },
+  { label: "认证", description: "服务器与账号" },
+  { label: "安全", description: "TLS 与隧道" },
+  { label: "确认", description: "测试并保存" },
+]);
 
 const filteredConnections = computed(() => {
   // preferenceRevision 是 localStorage 的响应式桥；偏好写入后递增即可触发重新筛选。
@@ -169,7 +179,7 @@ function resetEditor() {
   preservedTags.value = [];
   preferenceEnvironment.value = "development";
   advancedOpen.value = false;
-  editorTab.value = "general";
+  editorStep.value = 1;
   editorMessage.value = "";
   editorTone.value = "neutral";
 }
@@ -255,7 +265,7 @@ function handleError(error: unknown) {
 }
 
 function openSslSettings() {
-  editorTab.value = "ssl";
+  editorStep.value = 3;
   nextTick(() => {
     requestAnimationFrame(() => {
       document.querySelector<HTMLElement>(".editor-sheet")?.scrollTo({ top: 0, behavior: "smooth" });
@@ -267,20 +277,57 @@ function validateDraft(): boolean {
   if (!draft.name.trim() || (!draft.host.trim() && !draft.connectionString.trim() && !hasStoredConnectionString.value) || !draft.port) {
     editorTone.value = "danger";
     editorMessage.value = "请填写连接名称、主机（或连接串）和端口。";
+    editorStep.value = !draft.name.trim() ? 1 : 2;
     return false;
   }
   if (draft.proxyEnabled && (!draft.proxyHost.trim() || !draft.proxyPort)) {
     editorTone.value = "danger";
     editorMessage.value = "启用代理后必须填写代理主机和端口。";
+    editorStep.value = 3;
     return false;
   }
   if (draft.sshEnabled && !draft.sshProfileId && (!draft.sshHost.trim() || !draft.sshPort || !draft.sshUsername.trim())) {
     editorTone.value = "danger";
     editorMessage.value = "启用 SSH 后必须填写 SSH 主机、端口和用户名。";
-    editorTab.value = "ssh";
+    editorStep.value = 3;
     return false;
   }
   return true;
+}
+
+function goToEditorStep(step: 1 | 2 | 3 | 4) {
+  editorStep.value = step;
+  advancedOpen.value = false;
+  nextTick(() => document.querySelector<HTMLElement>(".editor-sheet")?.scrollTo({ top: 0, behavior: "smooth" }));
+}
+
+function advanceEditor() {
+  if (editorStep.value === 1 && !draft.name.trim()) {
+    editorTone.value = "danger";
+    editorMessage.value = "请先填写连接名称。";
+    return;
+  }
+  if (editorStep.value === 2 && (!draft.host.trim() && !draft.connectionString.trim() && !hasStoredConnectionString.value)) {
+    editorTone.value = "danger";
+    editorMessage.value = "请填写数据库主机或连接串。";
+    return;
+  }
+  editorMessage.value = "";
+  editorTone.value = "neutral";
+  goToEditorStep(Math.min(4, editorStep.value + 1) as 1 | 2 | 3 | 4);
+}
+
+function retreatEditor() {
+  if (editorStep.value === 1) {
+    editorOpen.value = false;
+    return;
+  }
+  goToEditorStep((editorStep.value - 1) as 1 | 2 | 3);
+}
+
+function resetFilters() {
+  environment.value = "all";
+  favoritesOnly.value = false;
 }
 
 async function testConnection() {
@@ -325,10 +372,10 @@ async function saveConnection() {
 }
 
 async function deleteConnection(connection: MobileConnectionSummary) {
-  if (!window.confirm(`删除连接“${connection.name}”？加密保存在本机的凭据也会一并移除。`)) return;
   try {
     await deleteDirectConnection(connection.id);
     removeConnectionPreference(connection.id);
+    deleteCandidate.value = null;
     emit("changed");
   } catch (error) {
     handleError(error);
@@ -348,11 +395,19 @@ function changeDatabaseType() {
 }
 
 function handleBack() {
+  if (deleteCandidate.value) {
+    deleteCandidate.value = null;
+    return true;
+  }
   if (advancedOpen.value) {
     advancedOpen.value = false;
     return true;
   }
   if (editorOpen.value) {
+    if (editorStep.value > 1) {
+      retreatEditor();
+      return true;
+    }
     editorOpen.value = false;
     return true;
   }
@@ -367,10 +422,15 @@ onMounted(loadSavedSshProfiles);
   <div class="connection-manager manage-mode">
     <div class="catalog-tools">
       <label class="catalog-search">
-        <span aria-hidden="true">⌕</span>
-        <input v-model="search" type="search" placeholder="搜索连接或标签" />
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg>
+        <input v-model="search" type="search" placeholder="搜索名称、主机、标签或分组" />
+        <button v-if="search" type="button" aria-label="清除搜索" @click="search = ''">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg>
+        </button>
       </label>
-      <button class="filter-button" type="button" aria-label="显示收藏连接" :class="{ active: favoritesOnly }" @click="favoritesOnly = !favoritesOnly">≡</button>
+      <button class="filter-button" type="button" aria-label="仅显示收藏连接" :class="{ active: favoritesOnly }" @click="favoritesOnly = !favoritesOnly">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z" /></svg>
+      </button>
     </div>
 
     <div class="filter-strip">
@@ -379,12 +439,10 @@ onMounted(loadSavedSshProfiles);
       <button :class="{ active: environment === 'development' }" type="button" @click="environment = 'development'">开发</button>
       <button :class="{ active: environment === 'staging' }" type="button" @click="environment = 'staging'">预发</button>
       <button :class="{ active: environment === 'production' }" type="button" @click="environment = 'production'">生产</button>
+      <button v-if="activeFilterCount" class="reset-filter" type="button" @click="resetFilters">重置</button>
     </div>
 
-    <div v-if="groupedConnections.length === 0" class="browser-state catalog-empty">
-      <b>∅</b><strong>没有匹配的连接</strong>
-      <p>调整搜索或筛选条件，也可以直接创建新的数据库连接。</p>
-    </div>
+    <PageState v-if="groupedConnections.length === 0" compact title="没有匹配的连接" description="调整搜索或筛选条件，也可以直接创建新的数据库连接。" />
 
     <section v-for="group in groupedConnections" :key="group.type" class="connection-group">
       <button class="group-heading" type="button" :aria-expanded="!collapsedGroups.has(group.type)" @click="toggleGroup(group.type)">
@@ -412,17 +470,31 @@ onMounted(loadSavedSshProfiles);
               <i v-if="connection.ssl">TLS</i>
             </span>
           </span>
-          <button class="card-favorite" :class="{ favorite: preference(connection).favorite }" :aria-label="preference(connection).favorite ? '取消收藏' : '收藏'" type="button" @click.stop="toggleFavorite(connection)">{{ preference(connection).favorite ? "★" : "☆" }}</button>
+          <button class="card-favorite" :class="{ favorite: preference(connection).favorite }" :aria-label="preference(connection).favorite ? '取消收藏' : '收藏'" type="button" @click.stop="toggleFavorite(connection)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z" /></svg>
+          </button>
         </div>
         <div class="connection-actions">
           <span>{{ connection.note || "点击卡片浏览数据" }}</span>
           <button type="button" @click="openEdit(connection)">编辑</button>
-          <button class="danger-text" type="button" @click="deleteConnection(connection)">删除</button>
+          <button class="danger-text" type="button" @click="deleteCandidate = connection">删除</button>
         </div>
       </article>
     </section>
 
-    <button class="add-connection" type="button" aria-label="新建连接" @click="openCreate">＋</button>
+    <button class="add-connection" type="button" aria-label="新建连接" @click="openCreate">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+    </button>
+
+    <ConfirmDialog
+      :open="!!deleteCandidate"
+      tone="danger"
+      title="删除数据库连接？"
+      :description="deleteCandidate ? `连接“${deleteCandidate.name}”及本机加密保存的凭据将被移除，此操作无法撤销。` : ''"
+      confirm-label="永久删除"
+      @cancel="deleteCandidate = null"
+      @confirm="deleteCandidate && deleteConnection(deleteCandidate)"
+    />
 
     <Teleport to="body">
       <div v-if="editorOpen" class="sheet-backdrop" @click.self="editorOpen = false">
@@ -433,26 +505,28 @@ onMounted(loadSavedSshProfiles);
               <small>CONNECTION EDITOR</small>
               <h4>{{ draft.id ? "编辑连接" : "创建连接" }}</h4>
             </div>
-            <button type="button" aria-label="关闭" @click="editorOpen = false">×</button>
+            <button type="button" aria-label="关闭" @click="editorOpen = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
           </header>
 
-          <nav class="connection-tabs" aria-label="连接方式">
-            <button :class="{ active: editorTab === 'general' }" type="button" @click="editorTab = 'general'">常规</button>
-            <button :class="{ active: editorTab === 'ssl' }" type="button" @click="editorTab = 'ssl'"><i :data-on="draft.ssl"></i>SSL</button>
-            <button :class="{ active: editorTab === 'ssh' }" type="button" @click="editorTab = 'ssh'"><i :data-on="draft.sshEnabled"></i>SSH</button>
-            <button :class="{ active: editorTab === 'http' }" type="button" @click="editorTab = 'http'"><i :data-on="draft.proxyEnabled"></i>HTTP</button>
+          <nav class="editor-progress" aria-label="连接编辑步骤">
+            <button v-for="(step, index) in editorStepCopy" :key="step.label" :class="{ active: editorStep === index + 1, complete: editorStep > index + 1 }" type="button" @click="goToEditorStep((index + 1) as 1 | 2 | 3 | 4)">
+              <span>{{ editorStep > index + 1 ? "✓" : index + 1 }}</span>
+              <b>{{ step.label }}</b>
+              <small>{{ step.description }}</small>
+            </button>
           </nav>
 
-          <section v-show="editorTab === 'general'" class="connection-tab-panel">
+          <section v-if="editorStep === 1" class="connection-tab-panel">
+            <div class="step-heading"><small>STEP 1 / 4</small><h5>这是什么连接？</h5><p>选择数据库类型，并用名称、分组和环境帮助后续查找。</p></div>
+            <div class="database-type-grid" role="group" aria-label="数据库类型">
+              <button v-for="item in databaseTypes" :key="item.value" :class="{ selected: draft.dbType === item.value }" type="button" @click="draft.dbType = item.value; changeDatabaseType()">
+                <span class="type-icon"><img v-if="databaseIcon(item.value)" :src="databaseIcon(item.value)" alt="" /><svg v-else viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="6" ry="2.5" /><path d="M6 6v6c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V6M6 12v6c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-6" /></svg></span>
+                <span><strong>{{ item.label }}</strong><small>默认端口 {{ item.port }}</small></span>
+              </button>
+            </div>
             <div class="editor-grid">
-              <label class="wide"><span>名称</span><input v-model="draft.name" placeholder="订单库" /></label>
-              <label
-                ><span>类型</span
-                ><select v-model="draft.dbType" @change="changeDatabaseType">
-                  <option v-for="item in databaseTypes" :key="item.value" :value="item.value">{{ item.label }}</option>
-                </select></label
-              >
-              <label><span>分组</span><input v-model="groupDraft" placeholder="核心业务" /></label>
+              <label class="wide"><span>连接名称</span><input v-model="draft.name" placeholder="例如：订单生产库" /></label>
+              <label class="wide"><span>标签或分组</span><input v-model="groupDraft" placeholder="例如：核心业务" /></label>
               <fieldset class="wide environment-picker">
                 <legend>环境标签</legend>
                 <label v-for="item in environmentOptions" :key="item.value" :data-env="item.value">
@@ -460,10 +534,17 @@ onMounted(loadSavedSshProfiles);
                   <span>{{ item.label }}</span>
                 </label>
               </fieldset>
+            </div>
+            <p v-if="currentCapability.browse === 'unsupported'" class="capability-notice">此类型可在手机端创建、测试和编辑；当前没有专用数据浏览器，不会调用关系型 Schema API。</p>
+          </section>
+
+          <section v-else-if="editorStep === 2" class="connection-tab-panel">
+            <div class="step-heading"><small>STEP 2 / 4</small><h5>服务器与认证</h5><p>敏感信息只会交给 Android 原生安全存储，不会从连接详情回显。</p></div>
+            <div class="editor-grid">
               <label class="wide"><span>主机</span><input v-model="draft.host" autocapitalize="none" placeholder="db.internal" /></label>
               <p class="wide remote-hint">
                 <strong>跨网络连接</strong>
-                请填写公网域名、组网 VPN 地址，或在 SSH 页配置公网跳板机；手机流量下无法访问 192.168.x.x、10.x.x.x 等局域网地址。
+                请填写公网域名、组网 VPN 地址，或在下一步配置 SSH 跳板机。
               </p>
               <label><span>端口</span><input v-model.number="draft.port" type="number" min="1" max="65535" /></label>
               <label><span>数据库</span><input v-model="draft.database" :disabled="draft.dbType === 'etcd'" autocapitalize="none" :placeholder="draft.dbType === 'etcd' ? 'etcd 不使用数据库编号' : '可选，例如 login_system'" /></label>
@@ -499,7 +580,7 @@ onMounted(loadSavedSshProfiles);
             </div>
 
             <button class="advanced-toggle" type="button" @click="advancedOpen = !advancedOpen">
-              <span>超时与保活参数</span><b>{{ advancedOpen ? "−" : "＋" }}</b>
+              <span>超时与保活参数</span><svg :class="{ expanded: advancedOpen }" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
             </button>
             <div v-if="advancedOpen" class="advanced-editor">
               <div class="editor-grid">
@@ -510,97 +591,70 @@ onMounted(loadSavedSshProfiles);
             </div>
           </section>
 
-          <section v-show="editorTab === 'ssl'" class="connection-tab-panel transport-panel">
-            <div class="transport-heading">
-              <div>
-                <small>ENCRYPTED TRANSPORT</small>
-                <h5>SSL / TLS</h5>
-              </div>
-              <label class="rail-switch"><input v-model="draft.ssl" type="checkbox" /><span></span></label>
+          <section v-else-if="editorStep === 3" class="connection-tab-panel">
+            <div class="step-heading"><small>STEP 3 / 4</small><h5>安全与隧道</h5><p>只启用当前网络环境真正需要的传输方式。</p></div>
+            <div class="security-stack">
+              <section class="transport-panel">
+                <div class="transport-heading"><div><small>ENCRYPTED TRANSPORT</small><h5>SSL / TLS</h5></div><label class="rail-switch"><input v-model="draft.ssl" type="checkbox" /><span></span></label></div>
+                <p>跨公网直连时建议开启，并优先验证服务器证书和主机名。</p>
+                <div v-if="draft.ssl" class="editor-grid"><label class="wide"><span>证书验证模式</span><select v-model="draft.sslMode"><option value="required">仅加密（允许自签名证书）</option><option value="verify-ca">验证证书颁发机构</option><option value="verify-full">验证证书和主机名</option></select></label></div>
+                <p v-if="draft.ssl && draft.sslMode === 'required'" class="security-note">仅加密不会验证服务器身份，生产连接建议使用完整验证。</p>
+              </section>
+
+              <section class="transport-panel">
+                <div class="transport-heading"><div><small>LOCAL PORT FORWARD</small><h5>SSH 隧道</h5></div><label class="rail-switch"><input v-model="draft.sshEnabled" type="checkbox" /><span></span></label></div>
+                <p>手机先登录跳板机，再由跳板机访问数据库地址。</p>
+                <template v-if="draft.sshEnabled">
+                  <div class="editor-grid ssh-profile-picker"><label class="wide"><span>已保存的 SSH 配置</span><select v-model="draft.sshProfileId"><option value="">手动填写本连接</option><option v-for="profile in sshProfiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.username }}@{{ profile.host }}</option></select></label></div>
+                  <div v-if="selectedSshProfile" class="saved-ssh-card"><div><strong>{{ selectedSshProfile.name }}</strong><code>{{ selectedSshProfile.username }}@{{ selectedSshProfile.host }}:{{ selectedSshProfile.port }}</code></div><span>{{ selectedSshProfile.authMethod === "private-key" ? `密钥：${selectedSshProfile.keyName || "引用已失效"}` : "密码已加密保存" }}</span></div>
+                  <p v-if="sshProfilesError" class="security-note">{{ sshProfilesError }}</p>
+                  <p v-else-if="!sshProfiles.length" class="security-note">还没有预存配置，可前往底部“设置”页面添加；也可以继续手动填写。</p>
+                  <div v-if="!draft.sshProfileId" class="editor-grid">
+                    <label class="wide"><span>SSH 主机</span><input v-model="draft.sshHost" autocapitalize="none" placeholder="bastion.example.com" /></label>
+                    <label><span>SSH 端口</span><input v-model.number="draft.sshPort" type="number" min="1" max="65535" /></label>
+                    <label><span>SSH 用户名</span><input v-model="draft.sshUsername" autocapitalize="none" autocomplete="username" /></label>
+                    <label class="wide"><span>主机密钥 SHA256 指纹</span><input v-model="draft.sshHostKeyFingerprint" autocapitalize="none" placeholder="可选，例如 SHA256:AbCd…" /></label>
+                    <label class="wide"><span>认证方式</span><select v-model="draft.sshAuthMethod"><option value="password">密码</option><option value="private-key">私钥</option></select></label>
+                    <label v-if="draft.sshAuthMethod === 'password'" class="wide"><span>SSH 密码</span><input v-model="draft.sshPassword" type="password" autocomplete="new-password" placeholder="留空则沿用已保存密码" /></label>
+                    <template v-else><label class="wide"><span>OpenSSH / PEM 私钥</span><textarea v-model="draft.sshPrivateKey" rows="7" autocapitalize="none" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;留空则沿用已保存私钥"></textarea></label><label class="wide"><span>私钥口令</span><input v-model="draft.sshPrivateKeyPassphrase" type="password" autocomplete="new-password" placeholder="可选；留空则沿用" /></label></template>
+                  </div>
+                  <p class="security-note">{{ draft.sshProfileId ? "连接仅保存 SSH 配置 ID，凭据不会复制到 WebView。" : "SSH 密码和私钥通过 Android Keystore 加密保存。" }}生产环境请填写主机密钥指纹。</p>
+                </template>
+              </section>
+
+              <section class="transport-panel">
+                <div class="transport-heading"><div><small>HTTP CONNECT</small><h5>HTTP 代理</h5></div><label class="rail-switch"><input v-model="draft.proxyEnabled" type="checkbox" /><span></span></label></div>
+                <p>通过支持 CONNECT 的 HTTP 代理建立数据库 TCP 通道。</p>
+                <div v-if="draft.proxyEnabled" class="editor-grid"><label class="wide"><span>代理主机</span><input v-model="draft.proxyHost" autocapitalize="none" placeholder="proxy.example.com" /></label><label><span>代理端口</span><input v-model.number="draft.proxyPort" type="number" min="1" max="65535" /></label><label><span>代理用户名</span><input v-model="draft.proxyUsername" autocomplete="username" placeholder="可选" /></label><label class="wide"><span>代理密码</span><input v-model="draft.proxyPassword" type="password" autocomplete="new-password" placeholder="可选；留空则沿用已保存密码" /></label></div>
+                <p v-if="draft.proxyEnabled" class="security-note">HTTP 代理本身不等于加密；链路不可信时请同时开启数据库 TLS。</p>
+              </section>
             </div>
-            <p>新连接默认关闭 SSL。跨公网直连时建议开启；验证模式要求服务器证书由 Android 信任的 CA 签发。</p>
-            <div class="editor-grid">
-              <label class="wide"
-                ><span>证书验证模式</span
-                ><select v-model="draft.sslMode" :disabled="!draft.ssl">
-                  <option value="required">仅加密（允许自签名证书）</option>
-                  <option value="verify-ca">验证证书颁发机构</option>
-                  <option value="verify-full">验证证书和主机名</option>
-                </select></label
-              >
-            </div>
-            <p v-if="draft.ssl && draft.sslMode === 'required'" class="security-note">仅加密模式不会验证服务器身份，适合本地自签名环境；生产库建议使用完整验证。</p>
           </section>
 
-          <section v-show="editorTab === 'ssh'" class="connection-tab-panel transport-panel">
-            <div class="transport-heading">
-              <div>
-                <small>LOCAL PORT FORWARD</small>
-                <h5>SSH 隧道</h5>
-              </div>
-              <label class="rail-switch"><input v-model="draft.sshEnabled" type="checkbox" /><span></span></label>
-            </div>
-            <p>手机先登录跳板机，再由跳板机访问“常规”页中的数据库地址。</p>
-            <div class="editor-grid ssh-profile-picker">
-              <label class="wide"><span>已保存的 SSH 配置</span>
-                <select v-model="draft.sshProfileId" :disabled="!draft.sshEnabled" @change="draft.sshEnabled = true">
-                  <option value="">手动填写本连接</option>
-                  <option v-for="profile in sshProfiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.username }}@{{ profile.host }}</option>
-                </select>
-              </label>
-            </div>
-            <div v-if="selectedSshProfile" class="saved-ssh-card">
-              <div><strong>{{ selectedSshProfile.name }}</strong><code>{{ selectedSshProfile.username }}@{{ selectedSshProfile.host }}:{{ selectedSshProfile.port }}</code></div>
-              <span>{{ selectedSshProfile.authMethod === "private-key" ? "私钥" : "密码" }}已加密保存</span>
-            </div>
-            <p v-if="sshProfilesError" class="security-note">{{ sshProfilesError }}</p>
-            <p v-else-if="!sshProfiles.length" class="security-note">还没有预存配置，可前往底部“设置”页面添加；也可以继续手动填写。</p>
-            <div v-if="!draft.sshProfileId" class="editor-grid">
-              <label class="wide"><span>SSH 主机</span><input v-model="draft.sshHost" :disabled="!draft.sshEnabled" autocapitalize="none" placeholder="bastion.example.com" /></label>
-              <label><span>SSH 端口</span><input v-model.number="draft.sshPort" :disabled="!draft.sshEnabled" type="number" min="1" max="65535" /></label>
-              <label><span>SSH 用户名</span><input v-model="draft.sshUsername" :disabled="!draft.sshEnabled" autocapitalize="none" autocomplete="username" /></label>
-              <label class="wide"><span>主机密钥 SHA256 指纹</span><input v-model="draft.sshHostKeyFingerprint" :disabled="!draft.sshEnabled" autocapitalize="none" placeholder="可选，例如 SHA256:AbCd…" /></label>
-              <label class="wide"
-                ><span>认证方式</span
-                ><select v-model="draft.sshAuthMethod" :disabled="!draft.sshEnabled">
-                  <option value="password">密码</option>
-                  <option value="private-key">私钥</option>
-                </select></label
-              >
-              <label v-if="draft.sshAuthMethod === 'password'" class="wide"><span>SSH 密码</span><input v-model="draft.sshPassword" :disabled="!draft.sshEnabled" type="password" autocomplete="new-password" placeholder="留空则沿用已保存密码" /></label>
-              <template v-else>
-                <label class="wide"><span>OpenSSH / PEM 私钥</span><textarea v-model="draft.sshPrivateKey" :disabled="!draft.sshEnabled" rows="7" autocapitalize="none" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;留空则沿用已保存私钥"></textarea></label>
-                <label class="wide"><span>私钥口令</span><input v-model="draft.sshPrivateKeyPassphrase" :disabled="!draft.sshEnabled" type="password" autocomplete="new-password" placeholder="可选；留空则沿用" /></label>
-              </template>
-            </div>
-            <p class="security-note">{{ draft.sshProfileId ? "连接仅保存 SSH 配置 ID，凭据不会复制到 WebView。" : "SSH 密码和私钥通过 Android Keystore 加密保存。" }}生产环境请填写主机密钥指纹，防止跳板机被冒充。</p>
-          </section>
-
-          <section v-show="editorTab === 'http'" class="connection-tab-panel transport-panel">
-            <div class="transport-heading">
-              <div>
-                <small>HTTP CONNECT</small>
-                <h5>HTTP 代理</h5>
-              </div>
-              <label class="rail-switch"><input v-model="draft.proxyEnabled" type="checkbox" /><span></span></label>
-            </div>
-            <p>通过支持 CONNECT 方法的 HTTP 代理建立数据库 TCP 通道；也可作为 SSH 跳板机的上游代理。</p>
-            <div class="editor-grid">
-              <label class="wide"><span>代理主机</span><input v-model="draft.proxyHost" :disabled="!draft.proxyEnabled" autocapitalize="none" placeholder="proxy.example.com" /></label>
-              <label><span>代理端口</span><input v-model.number="draft.proxyPort" :disabled="!draft.proxyEnabled" type="number" min="1" max="65535" /></label>
-              <label><span>代理用户名</span><input v-model="draft.proxyUsername" :disabled="!draft.proxyEnabled" autocomplete="username" placeholder="可选" /></label>
-              <label class="wide"><span>代理密码</span><input v-model="draft.proxyPassword" :disabled="!draft.proxyEnabled" type="password" autocomplete="new-password" placeholder="可选；留空则沿用已保存密码" /></label>
-            </div>
-            <p class="security-note">HTTP 代理本身不等于加密；若代理链路不可信，请同时在 SSL 页启用数据库 TLS。</p>
+          <section v-else class="connection-tab-panel review-step">
+            <div class="step-heading"><small>STEP 4 / 4</small><h5>确认连接信息</h5><p>保存前检查目标与安全策略，也可以先测试手机到数据库的连通性。</p></div>
+            <dl class="connection-review">
+              <div><dt>名称</dt><dd>{{ draft.name || "未命名连接" }}</dd></div>
+              <div><dt>数据库</dt><dd>{{ currentCapability.label }}</dd></div>
+              <div><dt>环境</dt><dd>{{ environmentLabel(preferenceEnvironment) }}</dd></div>
+              <div><dt>服务器</dt><dd>{{ draft.host || "连接串" }}:{{ draft.port }}</dd></div>
+              <div><dt>认证</dt><dd>{{ draft.username || "未填写用户名" }}</dd></div>
+              <div><dt>安全通道</dt><dd>{{ [draft.ssl && "TLS", draft.sshEnabled && "SSH", draft.proxyEnabled && "HTTP"].filter(Boolean).join(" + ") || "未启用" }}</dd></div>
+              <div><dt>写入策略</dt><dd :class="{ danger: preferenceEnvironment === 'production', readonly: draft.readOnly }">{{ draft.readOnly ? "只读连接" : preferenceEnvironment === "production" ? "生产写入确认" : "允许写入" }}</dd></div>
+            </dl>
+            <button class="review-test" :disabled="testing || saving" type="button" @click="testConnection">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12h8M12 8v8" /><path d="M6 3h12v5a6 6 0 0 1-12 0Z" /><path d="M8 21h8" /></svg>
+              <span><strong>{{ testing ? "正在测试连接…" : "测试连接" }}</strong><small>从当前手机直接验证数据库连通性</small></span>
+            </button>
+            <p class="security-note final-note">密码、连接串、代理密码和 SSH 私钥不会从原生安全存储返回 WebView。</p>
           </section>
 
           <p v-if="editorMessage" class="editor-message" :data-tone="editorTone">{{ editorMessage }}</p>
           <button v-if="sslCertificateError" class="error-action" type="button" @click="openSslSettings">打开 SSL 设置</button>
-          <footer>
-            <button class="test-action" :disabled="testing || saving" type="button" @click="testConnection">
-              {{ testing ? "测试中…" : "测试连接" }}
-            </button>
-            <button class="save-action" :disabled="saving || testing" type="submit">{{ saving ? "保存中…" : "保存连接" }}</button>
+          <footer class="editor-footer">
+            <button class="test-action" :disabled="testing || saving" type="button" @click="retreatEditor">{{ editorStep === 1 ? "取消" : "上一步" }}</button>
+            <button v-if="editorStep < 4" class="save-action" :disabled="saving || testing" type="button" @click="advanceEditor">下一步</button>
+            <button v-else class="save-action" :disabled="saving || testing" type="submit">{{ saving ? "保存中…" : draft.id ? "保存修改" : "保存连接" }}</button>
           </footer>
         </form>
       </div>
@@ -615,8 +669,8 @@ onMounted(loadSavedSshProfiles);
 }
 .catalog-tools {
   display: grid;
-  grid-template-columns: 1fr 40px;
-  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: var(--space-2);
 }
 .catalog-search {
   display: flex;
@@ -624,19 +678,43 @@ onMounted(loadSavedSshProfiles);
   align-items: center;
   gap: 9px;
   border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--field);
-  padding: 0 12px;
-  box-shadow: none;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 0 var(--space-3);
+  box-shadow: 0 4px 16px rgba(23, 32, 51, 0.04);
 }
-.catalog-search span {
+.catalog-search > svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.catalog-search button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  background: transparent;
   color: var(--muted);
-  font-size: 18px;
+}
+.catalog-search button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
 }
 .catalog-search input {
   width: 100%;
   min-width: 0;
-  height: 38px;
+  height: 42px;
   border: 0;
   outline: 0;
   background: transparent;
@@ -645,21 +723,29 @@ onMounted(loadSavedSshProfiles);
 }
 .filter-button {
   border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--field);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   color: var(--muted);
-  font-size: 20px;
-  transform: rotate(180deg);
+}
+.filter-button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .filter-button.active {
   border-color: var(--acid);
+  background: var(--accent-soft);
   color: var(--acid);
 }
 .add-connection {
   position: fixed;
   z-index: 8;
   right: 20px;
-  bottom: calc(76px + var(--safe-bottom));
+  bottom: calc(var(--bottom-nav-height) + var(--page-bottom-safe) + var(--space-2));
   display: grid;
   width: 54px;
   height: 54px;
@@ -669,18 +755,23 @@ onMounted(loadSavedSshProfiles);
   background: linear-gradient(145deg, #2487ff, #0868ee);
   color: #fff;
   box-shadow: 0 10px 26px rgba(22, 119, 255, 0.38);
-  font-size: 28px;
-  font-weight: 400;
+}
+.add-connection svg {
+  width: 25px;
+  height: 25px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 .filter-strip {
   display: flex;
-  overflow-x: auto;
+  flex-wrap: wrap;
   gap: 7px;
   margin: 10px 0 14px;
-  scrollbar-width: none;
 }
 .filter-strip button {
-  flex: 1 0 54px;
+  flex: 1 1 54px;
   min-width: 54px;
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -693,6 +784,10 @@ onMounted(loadSavedSshProfiles);
   border-color: var(--acid);
   background: color-mix(in srgb, var(--acid) 7%, transparent);
   color: var(--acid);
+}
+.filter-strip .reset-filter {
+  border-color: transparent;
+  color: var(--danger);
 }
 .connection-group {
   margin-top: 10px;
@@ -734,9 +829,10 @@ onMounted(loadSavedSshProfiles);
 .managed-connection {
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--panel) 94%, var(--acid));
-  box-shadow: none;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: 0 5px 18px rgba(23, 32, 51, 0.045);
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 .managed-connection + .managed-connection {
   margin-top: 5px;
@@ -750,6 +846,10 @@ onMounted(loadSavedSshProfiles);
   padding: 9px 8px 7px;
   text-align: left;
   cursor: pointer;
+}
+.managed-connection:active {
+  border-color: color-mix(in srgb, var(--acid) 32%, var(--line));
+  transform: scale(0.995);
 }
 .connection-main:focus-visible {
   outline: 2px solid var(--acid);
@@ -839,10 +939,20 @@ onMounted(loadSavedSshProfiles);
   border: 0;
   background: transparent;
   color: var(--faint);
-  font-size: 20px;
+}
+.card-favorite svg {
+  width: 21px;
+  height: 21px;
+  fill: transparent;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
 }
 .card-favorite.favorite {
   color: #f6b800;
+}
+.card-favorite.favorite svg {
+  fill: currentColor;
 }
 .connection-actions {
   display: none;
@@ -911,7 +1021,7 @@ onMounted(loadSavedSshProfiles);
   max-height: none;
   border: 0;
   background: var(--panel-raised);
-  padding: 10px 18px calc(20px + var(--safe-bottom));
+  padding: 10px 18px 0;
   box-shadow: 0 -30px 90px rgba(0, 0, 0, 0.35);
   overscroll-behavior: contain;
 }
@@ -937,11 +1047,21 @@ onMounted(loadSavedSshProfiles);
   font-size: 21px;
 }
 .editor-sheet header button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 27px;
-  line-height: 1;
+}
+.editor-sheet header button svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
 }
 .connection-tabs {
   position: sticky;
@@ -983,6 +1103,148 @@ onMounted(loadSavedSshProfiles);
 .connection-tabs i[data-on="true"] {
   background: var(--acid);
   box-shadow: 0 0 8px rgba(199, 255, 61, 0.65);
+}
+.editor-progress {
+  position: sticky;
+  z-index: 10;
+  top: -10px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 -18px 20px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 96%, transparent);
+  padding: 9px 12px 11px;
+  backdrop-filter: blur(18px);
+}
+.editor-progress button {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.editor-progress button::after {
+  position: absolute;
+  top: 13px;
+  right: -25%;
+  width: 50%;
+  height: 1px;
+  background: var(--line);
+  content: "";
+}
+.editor-progress button:last-child::after {
+  display: none;
+}
+.editor-progress button > span {
+  display: grid;
+  z-index: 1;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel-raised);
+  font-size: 10px;
+}
+.editor-progress button b {
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 680;
+}
+.editor-progress button small {
+  overflow: hidden;
+  max-width: 100%;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-progress button.active,
+.editor-progress button.complete {
+  color: var(--acid);
+}
+.editor-progress button.active > span,
+.editor-progress button.complete > span {
+  border-color: var(--acid);
+  background: var(--accent-soft);
+}
+.editor-progress button.complete::after {
+  background: color-mix(in srgb, var(--acid) 50%, var(--line));
+}
+.step-heading {
+  margin-bottom: 18px;
+}
+.step-heading > small {
+  color: var(--acid);
+  font: 8px "Azeret Mono Variable", monospace;
+  letter-spacing: 0.12em;
+}
+.step-heading h5 {
+  margin: 7px 0 4px;
+  font-size: 18px;
+}
+.step-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.database-type-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 17px;
+}
+.database-type-grid > button {
+  display: grid;
+  min-width: 0;
+  min-height: 66px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  padding: 8px;
+  text-align: left;
+}
+.database-type-grid > button.selected {
+  border-color: color-mix(in srgb, var(--acid) 55%, var(--line));
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acid) 16%, transparent);
+}
+.type-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+}
+.type-icon img,
+.type-icon svg {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+.type-icon svg {
+  fill: none;
+  stroke: var(--acid);
+  stroke-width: 1.6;
+}
+.database-type-grid strong,
+.database-type-grid small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.database-type-grid strong {
+  font-size: 10px;
+}
+.database-type-grid small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 8px;
 }
 .connection-tab-panel {
   animation: tab-in 0.16s ease-out;
@@ -1150,6 +1412,19 @@ onMounted(loadSavedSshProfiles);
   font-size: 10px;
   text-align: left;
 }
+.advanced-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: var(--acid);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 150ms ease;
+}
+.advanced-toggle svg.expanded {
+  transform: rotate(180deg);
+}
 .advanced-toggle b {
   color: var(--acid);
 }
@@ -1159,11 +1434,15 @@ onMounted(loadSavedSshProfiles);
   padding: 14px 12px;
 }
 .transport-panel {
-  min-height: 360px;
+  min-height: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: linear-gradient(145deg, color-mix(in srgb, var(--acid) 5%, var(--panel)), var(--panel) 45%);
   padding: 15px 13px;
+}
+.security-stack {
+  display: grid;
+  gap: 10px;
 }
 .transport-panel > p {
   margin: 0 0 18px;
@@ -1307,7 +1586,7 @@ onMounted(loadSavedSshProfiles);
   color: var(--acid);
 }
 .editor-message[data-tone="danger"] {
-  color: #ff918d;
+  color: var(--danger);
 }
 .error-action {
   width: 100%;
@@ -1318,13 +1597,20 @@ onMounted(loadSavedSshProfiles);
   color: #ffb0ad;
   font-size: 10px;
 }
-.editor-sheet footer {
+.editor-sheet .editor-footer {
+  position: sticky;
+  z-index: 12;
+  bottom: 0;
   display: grid;
   grid-template-columns: 1fr 1.35fr;
   gap: 8px;
-  margin-top: 17px;
+  margin: 17px -18px 0;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 96%, transparent);
+  padding: 11px 18px calc(11px + var(--safe-bottom));
+  backdrop-filter: blur(18px);
 }
-.editor-sheet footer button {
+.editor-sheet .editor-footer button {
   min-height: 49px;
   font-weight: 720;
   font-size: 10px;
@@ -1343,8 +1629,86 @@ onMounted(loadSavedSshProfiles);
 .test-action {
   border-radius: 7px;
 }
-.editor-sheet footer button:disabled {
+.editor-sheet .editor-footer button:disabled {
   opacity: 0.55;
+}
+.connection-review {
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+.connection-review > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px 13px;
+}
+.connection-review > div + div {
+  border-top: 1px solid var(--line);
+}
+.connection-review dt,
+.connection-review dd {
+  margin: 0;
+  font-size: 10px;
+}
+.connection-review dt {
+  color: var(--muted);
+}
+.connection-review dd {
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+.connection-review dd.danger {
+  color: var(--danger);
+}
+.connection-review dd.readonly {
+  color: var(--acid);
+}
+.review-test {
+  display: grid;
+  width: 100%;
+  min-height: 58px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 13px;
+  border: 1px solid color-mix(in srgb, var(--acid) 45%, var(--line));
+  background: var(--accent-soft);
+  padding: 9px 12px;
+  color: var(--acid);
+  text-align: left;
+}
+.review-test svg {
+  width: 25px;
+  height: 25px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.review-test strong,
+.review-test small {
+  display: block;
+}
+.review-test strong {
+  font-size: 11px;
+}
+.review-test small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 8px;
+}
+.final-note {
+  margin-top: 13px;
+  border-left: 2px solid var(--success);
+  background: color-mix(in srgb, var(--success) 6%, transparent);
+  padding: 9px 10px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
 }
 @media (min-width: 720px) {
   .sheet-backdrop {

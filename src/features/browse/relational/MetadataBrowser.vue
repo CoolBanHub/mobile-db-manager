@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import InlineSelect from "@/components/InlineSelect.vue";
 import CreateTableEditor from "./CreateTableEditor.vue";
 import SessionDiagnostics from "./SessionDiagnostics.vue";
 import TableDataBrowser from "./TableDataBrowser.vue";
@@ -48,6 +49,10 @@ const hasMoreTables = ref(false);
 const tableTarget = ref<MobileTableTarget | null>(null);
 const actionTable = ref("");
 const objectSearch = ref("");
+const tableScope = ref("all");
+const tableOrder = ref("name");
+const tableScopeOptions = [{ value: "all", label: "全部表" }];
+const tableOrderOptions = [{ value: "name", label: "按名称" }];
 const tableDataBrowser = ref<{ handleBack: () => boolean } | null>(null);
 const createTableOpen = ref(false);
 let retryAction: (() => Promise<void>) | null = null;
@@ -567,6 +572,14 @@ function retry() {
   if (retryAction) void runLoad(retryAction);
 }
 
+function refreshObjects() {
+  if (!selectedConnection.value || !selectedDatabase.value) return;
+  const connectionId = selectedConnection.value.id;
+  void runLoad(async () => {
+    await Promise.all([fetchTables(connectionId, selectedDatabase.value, selectedSchema.value, 0), fetchRoutines()]);
+  });
+}
+
 onMounted(() => {
   if (props.connections.length === 1) void openConnection(props.connections[0]);
 });
@@ -591,7 +604,7 @@ onBeforeUnmount(() => {
     <TableDataBrowser v-else-if="level === 'data' && tableTarget" ref="tableDataBrowser" :target="tableTarget" @back="goBack" @open-query="openGeneratedQuery" />
     <template v-else>
       <div v-if="level === 'details'" class="browser-toolbar">
-        <button type="button" aria-label="返回上一级" @click="goBack">←</button>
+        <button type="button" aria-label="返回上一级" @click="goBack"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg></button>
         <div>
           <span>{{ title }}</span>
           <p>{{ contextLabel }}</p>
@@ -604,7 +617,13 @@ onBeforeUnmount(() => {
           <path d="m16 16 4 4" />
         </svg>
         <input v-model="objectSearch" type="search" placeholder="搜索数据库、模式、表或列" />
-        <button type="button" aria-label="筛选">≡</button>
+        <button type="button" aria-label="筛选"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg></button>
+      </div>
+
+      <div v-if="level === 'databases'" class="object-toolbar">
+        <label><span>表范围</span><InlineSelect v-model="tableScope" :options="tableScopeOptions" ariaLabel="表范围" /></label>
+        <label><span>排序</span><InlineSelect v-model="tableOrder" :options="tableOrderOptions" ariaLabel="排序方式" /></label>
+        <button type="button" :disabled="loading" @click="refreshObjects">刷新</button>
       </div>
 
       <div v-if="loading" class="browser-state">
@@ -666,9 +685,10 @@ onBeforeUnmount(() => {
                     <rect x="3.5" y="4" width="17" height="16" rx="1.5" />
                     <path d="M3.5 9h17M9 4v16" />
                   </svg>
-                  <span>表 ({{ visibleRelationTables.length }})</span>
+                  <span>{{ selectedSchema || "默认" }} · 表 ({{ visibleRelationTables.length }})</span>
                 </button>
                 <template v-if="expandedObjectGroups.has('tables')">
+                  <div class="tree-count"><span>按名称加载 · 支持搜索全部对象</span><strong>{{ visibleRelationTables.length }} / {{ tables.length }} 表</strong></div>
                   <button class="tree-node leaf-node create-table-node" :disabled="selectedConnection?.readOnly" type="button" @click="openCreateTable">
                     <span class="tree-symbol">＋</span><span>新建表</span><small>{{ selectedConnection?.readOnly ? "只读连接" : "可视化设计" }}</small>
                   </button>
@@ -681,7 +701,7 @@ onBeforeUnmount(() => {
                     <small>{{ table.comment || table.table_type }}</small>
                   </button>
                   <button v-if="hasMoreTables" class="tree-node leaf-node load-node" :disabled="loadingMore" type="button" @click="loadMoreTables">
-                    <span>…</span><small>{{ loadingMore ? "正在加载" : "加载更多" }}</small>
+                    <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4 4 4-4M8 13l4 4 4-4" /></svg><span>{{ loadingMore ? "正在加载" : `显示更多表 · ${visibleRelationTables.length} / ${tables.length}` }}</span>
                   </button>
                 </template>
 
@@ -718,7 +738,6 @@ onBeforeUnmount(() => {
               <button :class="{ active: inspectorTab === 'structure' }" type="button" @click="selectInspectorTab('structure')">结构</button>
               <button :class="{ active: inspectorTab === 'data' }" type="button" @click="selectInspectorTab('data')">数据</button>
               <button :class="{ active: inspectorTab === 'query' }" type="button" @click="selectInspectorTab('query')">查询</button>
-              <button type="button" @click="openSessionDiagnostics">活动</button>
             </nav>
             <div v-if="inspectorTab === 'structure'" class="schema-summary">
               <div class="schema-summary-title">
@@ -1622,5 +1641,137 @@ onBeforeUnmount(() => {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Prototype-aligned mobile object browser surfaces. */
+.metadata-browser {
+  min-width: 0;
+  max-width: 100%;
+  padding-bottom: var(--space-3);
+}
+.browser-search,
+.browser-toolbar {
+  border-radius: var(--radius-input);
+  background: var(--card-background);
+}
+.database-tree-view,
+.schema-objects,
+.detail-panel {
+  min-width: 0;
+}
+.tree-root-label {
+  min-height: var(--control-height);
+  border-color: var(--divider-color);
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  background: var(--primary-soft);
+}
+.metadata-tree,
+.schema-inspector,
+.metadata-card,
+.browser-row {
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.metadata-tree,
+.schema-inspector,
+.metadata-card {
+  border-radius: var(--radius-card);
+}
+.tree-node {
+  min-height: var(--control-height-sm);
+  border-radius: var(--radius-sm);
+}
+.tree-node:active,
+.browser-row:active {
+  background: var(--surface-pressed);
+}
+.schema-inspector nav,
+.detail-tabs,
+.object-tabs {
+  background: var(--card-background);
+}
+.schema-inspector nav button.active,
+.detail-tabs button.active,
+.object-tabs button.active {
+  color: var(--primary);
+  box-shadow: inset 0 -2px var(--primary);
+}
+.inline-danger,
+.table-actions button.danger,
+.schema-management-actions button.danger {
+  color: var(--danger);
+}
+.browser-search { min-height: 48px; margin-bottom: var(--space-3); border-color: var(--divider-color); border-radius: var(--radius-card); background: var(--card-background); box-shadow: 0 5px 18px rgba(23, 32, 51, .035); }
+.browser-search input { height: 46px; font-size: 12px; }
+.browser-search > svg { width: 19px; height: 19px; }
+.browser-search button { display: grid; height: 32px; place-items: center; transform: none; }
+.browser-search button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.browser-toolbar button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.browser-state { display: grid; min-height: 160px; align-content: center; justify-items: start; border-color: var(--divider-color); border-radius: var(--radius-card); background: var(--card-background); }
+.browser-state.error { min-height: 0; grid-template-columns: 40px minmax(0, 1fr); column-gap: var(--space-3); margin-top: var(--space-2); border-style: solid; border-color: color-mix(in srgb, var(--danger) 24%, var(--divider-color)); background: color-mix(in srgb, var(--danger) 4%, var(--card-background)); padding: var(--space-4); }
+.browser-state.error > b { grid-row: 1 / span 3; display: grid; width: 40px; height: 40px; place-items: center; margin: 0; border-radius: 12px; background: color-mix(in srgb, var(--danger) 11%, var(--card-background)); font-size: 20px; }
+.browser-state.error strong { margin: 1px 0 0; }
+.browser-state.error p { min-width: 0; margin-top: 5px; overflow-wrap: anywhere; }
+.browser-state.error button { grid-column: 2; justify-self: start; min-height: 36px; margin-top: var(--space-3); border-radius: var(--radius-input); background: var(--card-background); padding: 0 var(--space-3); }
+.database-tree-view { gap: var(--space-2); }
+.tree-root-label { padding: 0 var(--space-3); border: 1px solid var(--divider-color); border-radius: var(--radius-card); }
+.metadata-tree { border: 1px solid var(--divider-color); padding: var(--space-2); }
+.tree-node { padding-right: var(--space-2); }
+.schema-inspector { overflow: hidden; border-bottom: 1px solid var(--divider-color); border-radius: var(--radius-card); box-shadow: var(--shadow); }
+.schema-summary { background: color-mix(in srgb, var(--card-background) 94%, var(--primary-soft)); }
+@media (max-width: 360px) {
+  .schema-summary { grid-template-columns: minmax(0, 1fr) minmax(72px, .8fr); }
+  .schema-summary dl:last-child { display: none; }
+}
+
+/* Screenshot reference: flat mobile database explorer. */
+:global(.section-stage:has(.metadata-browser) > .app-header) { min-height: 64px; gap: 9px; padding: 4px 0 8px; }
+:global(.section-stage:has(.metadata-browser) > .app-header .header-back) { width: 44px; height: 44px; margin-left: 0; border: 1px solid #dbe4ef; border-radius: 6px; background: #fff; }
+:global(.section-stage:has(.metadata-browser) > .app-header .header-back svg) { width: 20px; }
+:global(.section-stage:has(.metadata-browser) > .app-header .app-title h1) { font-size: 21px; font-weight: 760; letter-spacing: -.025em; }
+:global(.section-stage:has(.metadata-browser) > .app-header .app-title p) { margin-top: 3px; color: #65728a; font-size: 11px; }
+:global(.section-stage:has(.metadata-browser) > .app-header .header-badge) { border-color: #ffb8bd; background: #fff7f7; padding: 6px 7px; color: #ef3340; }
+:global(.section-stage:has(.metadata-browser) > .app-header .header-readonly) { font-size: 9px; }
+.metadata-browser { padding: 0 0 var(--space-2); color: #172033; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+.browser-search { grid-template-columns: 38px minmax(0, 1fr) 44px; min-height: 46px; margin: 0 0 10px; border: 1px solid #dbe4ef; border-radius: 5px; background: #f8fafd; box-shadow: none; }
+.browser-search input { height: 44px; color: #172033; font-size: 11px; }
+.browser-search input::placeholder { color: #667085; opacity: 1; }
+.browser-search > svg { width: 17px; height: 17px; margin-left: 7px; stroke: #65728a; }
+.browser-search button { width: 44px; height: 44px; border-left: 1px solid #dbe4ef; color: #65728a; }
+.object-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px; align-items: end; gap: 7px; margin-bottom: 9px; }
+.object-toolbar label { display: grid; min-width: 0; gap: 5px; color: #65728a; font-size: 9px; font-weight: 600; }
+.object-toolbar select { width: 100%; min-width: 0; height: 44px; border: 1px solid #dbe4ef; border-radius: 5px; outline: 0; background: #f8fafd; padding: 0 10px; color: #172033; font-size: 10px; font-weight: 650; }
+.object-toolbar > button { height: 44px; border: 1px solid #dbe4ef; border-radius: 5px; background: #f8fafd; color: #0878ff; font-size: 10px; font-weight: 700; }
+.database-tree-view { height: auto; min-height: 0; gap: 0; grid-template-rows: auto auto auto; margin: 0; }
+.tree-root-label { min-height: 35px; border: 0; border-bottom: 1px solid #dbe4ef; border-radius: 0; background: #fff; padding: 0 5px; color: #65728a; font-size: 10px; }
+.tree-root-label svg { width: 16px; height: 16px; }
+.metadata-tree { overflow: visible; min-height: 0; border: 0; border-radius: 0; background: #fff; padding: 0; }
+.tree-node { min-height: 48px; gap: 10px; border: 0; border-bottom: 1px solid #e5ebf2; border-radius: 0; background: #fff; padding-top: 0; padding-bottom: 0; color: #172033; font-size: 11px; }
+.tree-node:active { background: #f4f7fb; }
+.database-node { padding-left: 7px; }
+.group-node { padding-left: 31px; background-image: linear-gradient(#dbe4ef, #dbe4ef); background-position: 18px 0; background-size: 1px 100%; background-repeat: no-repeat; }
+.leaf-node { padding-left: 70px; background-image: linear-gradient(#dbe4ef, #dbe4ef); background-position: 42px 0; background-size: 1px 100%; background-repeat: no-repeat; }
+.tree-icon { width: 16px; height: 16px; color: #0878ff; stroke-width: 1.65; }
+.tree-chevron { width: 12px; flex-basis: 12px; color: #172033; font-size: 14px; }
+.tree-symbol { color: #0878ff; }
+.leaf-node > small { color: #7d8ba5; font-size: 8px; letter-spacing: .04em; text-transform: uppercase; }
+.schema-switcher { min-height: 38px; margin-left: 42px; border-bottom: 1px solid #e5ebf2; }
+.tree-count { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #dbe4ef; background-image: linear-gradient(#dbe4ef, #dbe4ef); background-position: 42px 0; background-size: 1px 100%; background-repeat: no-repeat; padding: 0 7px 0 54px; color: #7d8ba5; font-size: 8px; }
+.tree-count strong { flex: none; color: #172033; font-size: 9px; }
+.leaf-node.load-node { justify-content: center; background-image: none; padding-left: 0; color: #172033; font-weight: 650; }
+.leaf-node.load-node .tree-icon { width: 15px; color: #0878ff; }
+.schema-inspector { overflow: hidden; margin-top: 8px; border: 1px solid #dbe4ef; border-radius: 6px; background: #fff; box-shadow: none; }
+.schema-inspector nav { grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid #dbe4ef; background: #fff; }
+.schema-inspector nav button { min-height: 44px; color: #65728a; font-size: 10px; font-weight: 650; }
+.schema-inspector nav button.active { background: #eaf3ff; color: #0878ff; box-shadow: inset 0 -2px #0878ff; }
+.schema-summary { min-height: 130px; grid-template-columns: minmax(0, 1.05fr) 1fr 1fr; gap: 6px; background: #fff; padding: 14px 12px; }
+.schema-summary-title { color: #172033; font-size: 10px; }
+.schema-summary-title svg { width: 18px; height: 18px; stroke: #0878ff; }
+.schema-summary dl { gap: 9px 7px; border-left: 0; padding-left: 4px; color: #172033; font-size: 8px; }
+.schema-summary dt { color: #65728a; font-weight: 600; }
+.browser-state { border-color: #dbe4ef; background: #fff; }
+@media (max-width: 360px) {
+  .object-toolbar { grid-template-columns: 1fr 1fr; }
+  .object-toolbar > button { grid-column: 1 / -1; }
 }
 </style>

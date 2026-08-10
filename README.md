@@ -20,10 +20,13 @@ Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端�
 
 - 本机创建、编辑、测试、搜索、收藏、分组和删除数据库连接，并使用统一淡蓝色的
   开发、预发、生产环境标签分类和筛选连接；新连接默认使用开发标签。
-- 设置页可提前保存和维护可复用的 SSH 跳板机配置，数据库连接只引用配置 ID；
-  数据库密码、连接串、代理密码、SSH 密码和私钥均使用 Android Keystore
-  AES-GCM 加密保存，敏感内容不会返回 WebView。
-- 设置首页按界面密度、SSH 跳板机、隐私与安全、关于分成独立子页面，Android
+- 设置页分别维护可复用的 SSH 跳板机和独立 SSH 密钥。跳板机可使用密码，或通过
+  `keyId` 引用一把可被多个跳板机复用的密钥；数据库连接仍只引用跳板机 ID。
+  Android 系统文件选择器可把 OpenSSH/PEM 私钥直接交给原生保险箱，导入时校验
+  格式和口令并计算公钥 SHA256 指纹，私钥文件内容不会进入 WebView。
+- 数据库密码、连接串、代理密码、SSH 密码、私钥和私钥口令均使用 Android Keystore
+  AES-GCM 加密保存；被跳板机引用的密钥和被数据库连接引用的跳板机无法误删。
+- 设置首页按界面密度、SSH 跳板机、SSH 密钥、隐私与安全、关于分成独立子页面，Android
   返回键会先返回设置首页；应用固定使用浅色界面。
 - 支持 PostgreSQL、MySQL/MariaDB、SQL Server 的元数据浏览、SQL 查询和表数据
   编辑；新增、修改和删除会先进入待提交队列，复核确认后在同一个 JDBC 事务中执行，
@@ -119,7 +122,7 @@ pnpm android:device:test
 前端页面放在 `src/features/`：
 
 - `connections/`：连接管理。
-- `settings/`：本机设置和可复用 SSH 配置管理。
+- `settings/`：本机设置、SSH 跳板机和独立 SSH 密钥管理。
 - `query/`：SQL 工作台、历史和收藏。
 - `browse/relational/`：关系型数据库元数据和表数据浏览。
 - `browse/redis/`、`browse/mongo/`、`browse/etcd/`：各自数据库的数据浏览器。
@@ -129,6 +132,7 @@ pnpm android:device:test
 
 - `connections.ts`：连接列表、保存、删除和测试。
 - `sshProfiles.ts`：可复用 SSH 配置的列表、保存和删除。
+- `sshKeys.ts`：独立 SSH 密钥的导入、列表、保存和删除。
 - `metadata.ts`：库、schema、表、字段、索引等元数据读取。
 - `query.ts`：SQL 执行、取消、Explain。
 - `tableData.ts`：表格数据浏览和行级增删改。
@@ -154,8 +158,9 @@ Android 原生直连代码在
 - `DirectRedisConnection.java`、`DirectMongoConnection.java`、
   `DirectEtcdConnection.java`：各数据库的底层连接客户端。
 - `DirectTransport.java`：SSH 转发和 HTTP CONNECT 隧道。
-- `DirectConnectionStore.java`、`DirectSshProfileStore.java`、`SecureVaultStore.java`：
-  连接配置、可复用 SSH 配置和敏感信息保存。
+- `DirectConnectionStore.java`、`DirectSshProfileStore.java`、`DirectSshKeyStore.java`、
+  `SecureVaultStore.java`：连接配置、跳板机、独立 SSH 密钥和敏感信息保存；旧版内嵌
+  私钥会在首次读取时迁移到独立密钥库，原跳板机 ID 保持不变。
 - `AppUpdatePlugin.java`、`AppReleaseUpdateService.java`、`AppUpdateVersion.java`：
   GitHub Release 检查、APK 下载和版本比较。
 

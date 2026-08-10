@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import InlineSelect from "@/components/InlineSelect.vue";
 import { loadDirectRedisKey, loadDirectRedisOverview, mutateDirectRedis, scanDirectRedisKeys } from "@/lib/direct/redis";
 import type { MobileConnectionSummary, MobileRedisKeyDetail, MobileRedisOverview } from "@/lib/mobileTypes";
 
@@ -31,18 +32,6 @@ const createOpen = ref(false);
 const createKey = ref("");
 const createValue = ref("");
 const keyDetails = ref<Record<string, MobileRedisKeyDetail>>({});
-const expandedNamespaces = ref(new Set<string>());
-
-interface RedisTableNode {
-  id: string;
-  label: string;
-  children: RedisTableNode[];
-  key?: string;
-}
-
-interface FlatRedisTableNode extends RedisTableNode {
-  depth: number;
-}
 
 // UI 校验用于即时禁用按钮；原生插件会再次强制校验只读和生产连接名称。
 const canWrite = computed(() => !props.connection.readOnly && (!props.connection.isProduction || productionConfirmation.value === props.connection.name));
@@ -58,40 +47,14 @@ const redisDatabases = computed(() => {
   if (!entries.has(database.value)) entries.set(database.value, overview.value?.keyCount ?? 0);
   return [...entries].sort(([left], [right]) => left - right).map(([index, keyCount]) => ({ index, keyCount }));
 });
+const redisTypeOptions = [
+  { value: "all", label: "所有类型" }, { value: "string", label: "String" }, { value: "hash", label: "Hash" },
+  { value: "list", label: "List" }, { value: "set", label: "Set" }, { value: "zset", label: "ZSet" }, { value: "stream", label: "Stream" },
+];
+const redisDatabaseOptions = computed(() => redisDatabases.value.map((item) => ({ value: String(item.index), label: `DB ${item.index} · ${formatCount(item.keyCount)}` })));
 const filteredKeys = computed(() =>
   keys.value.filter((key) => typeFilter.value === "all" || !keyDetails.value[key] || keyDetails.value[key]?.type === typeFilter.value),
 );
-const keyTree = computed<RedisTableNode[]>(() => {
-  const roots: RedisTableNode[] = [];
-  for (const key of filteredKeys.value) {
-    const segments = key.split(":").filter(Boolean);
-    if (segments.length === 0) segments.push(key);
-    let branch = roots;
-    let id = "";
-    segments.forEach((segment, index) => {
-      id = id ? `${id}:${segment}` : segment;
-      let node = branch.find((candidate) => candidate.id === id);
-      if (!node) {
-        node = { id, label: segment, children: [] };
-        branch.push(node);
-      }
-      if (index === segments.length - 1) node.key = key;
-      branch = node.children;
-    });
-  }
-  return roots;
-});
-const visibleKeyRows = computed<FlatRedisTableNode[]>(() => {
-  const rows: FlatRedisTableNode[] = [];
-  const visit = (nodes: RedisTableNode[], depth: number) => {
-    for (const node of nodes) {
-      rows.push({ ...node, depth });
-      if (node.children.length && expandedNamespaces.value.has(node.id)) visit(node.children, depth + 1);
-    }
-  };
-  visit(keyTree.value, 0);
-  return rows;
-});
 
 function handleBack() {
   if (createOpen.value) {
@@ -146,47 +109,18 @@ function formatTtl(value: number) {
   if (value === -1) return "永久";
   if (value === -2) return "已过期";
   if (value < 1_000) return `${value} ms`;
-  if (value < 60_000) return `${Math.ceil(value / 1_000)} 秒`;
-  if (value < 3_600_000) return `${Math.ceil(value / 60_000)} 分钟`;
-  return `${Math.ceil(value / 3_600_000)} 小时`;
-}
-
-function parseKeyspaceInfo(info: string) {
-  const line = info.split(/\r?\n/).find((item) => item.startsWith(`db${database.value}:`));
-  return line?.slice(line.indexOf(":") + 1).replaceAll(",", " · ") ?? "当前逻辑库";
+  if (value < 60_000) return `${Math.ceil(value / 1_000)}s`;
+  if (value < 3_600_000) return `${Math.ceil(value / 60_000)}m`;
+  return `${Math.ceil(value / 3_600_000)}h`;
 }
 
 function valuePreview(item: MobileRedisKeyDetail | undefined) {
   if (!item) return "读取中…";
   if (item.type === "string") return String(item.value ?? "");
   const values = Array.isArray(item.value) ? item.value.map((value) => String(value ?? "")) : [];
-  if (item.type === "hash" || item.type === "zset") {
-    return values.slice(0, 4).join(" · ") || "空";
-  }
-  return values.slice(0, 3).join(", ") || "空";
-}
-
-function expandKeyNamespaces() {
-  const next = new Set<string>();
-  const visit = (nodes: RedisTableNode[], depth: number) => {
-    for (const node of nodes) {
-      if (node.children.length && depth < 3) next.add(node.id);
-      visit(node.children, depth + 1);
-    }
-  };
-  visit(keyTree.value, 0);
-  expandedNamespaces.value = next;
-}
-
-function toggleTableNode(node: FlatRedisTableNode) {
-  if (!node.children.length && node.key) {
-    void openKey(node.key);
-    return;
-  }
-  const next = new Set(expandedNamespaces.value);
-  if (next.has(node.id)) next.delete(node.id);
-  else next.add(node.id);
-  expandedNamespaces.value = next;
+  if (item.type === "hash" || item.type === "zset") return `${Math.floor(values.length / 2)} fields`;
+  if (item.type === "set") return `${values.length} fields`;
+  return `${values.length} items`;
 }
 
 async function hydrateKeyDetails(keyNames: string[]) {
@@ -224,7 +158,6 @@ async function reload() {
     overview.value = nextOverview;
     keys.value = page.keys;
     cursor.value = page.cursor;
-    expandKeyNamespaces();
     void hydrateKeyDetails(page.keys);
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "Redis 数据加载失败";
@@ -244,6 +177,11 @@ async function applyDatabase() {
   await reload();
 }
 
+function applyDatabaseValue(value: string) {
+  databaseDraft.value = value;
+  void applyDatabase();
+}
+
 async function applySearch() {
   activePattern.value = normalizedPattern();
   await reload();
@@ -258,13 +196,17 @@ async function loadMore() {
     // Redis SCAN 允许重复返回键，合并分页时必须去重。
     keys.value = [...new Set([...keys.value, ...page.keys])];
     cursor.value = page.cursor;
-    expandKeyNamespaces();
     void hydrateKeyDetails(page.keys);
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "继续扫描 Redis 键失败";
   } finally {
     loadingMore.value = false;
   }
+}
+
+function handleKeyScroll(event: Event) {
+  const target = event.currentTarget as HTMLElement;
+  if (target.scrollTop + target.clientHeight >= target.scrollHeight - 56) void loadMore();
 }
 
 async function openKey(key: string) {
@@ -412,60 +354,36 @@ onMounted(reload);
         <div class="redis-table-tools">
           <label>
             <span>类型</span>
-            <select v-model="typeFilter" aria-label="Redis 键类型">
-              <option value="all">所有类型</option>
-              <option value="string">String</option>
-              <option value="hash">Hash</option>
-              <option value="list">List</option>
-              <option value="set">Set</option>
-              <option value="zset">ZSet</option>
-              <option value="stream">Stream</option>
-            </select>
+            <InlineSelect v-model="typeFilter" :options="redisTypeOptions" ariaLabel="Redis 键类型" />
           </label>
           <label>
             <span>逻辑库</span>
-            <select v-model="databaseDraft" aria-label="Redis 数据库" @change="applyDatabase">
-              <option v-for="item in redisDatabases" :key="item.index" :value="String(item.index)">DB {{ item.index }} · {{ formatCount(item.keyCount) }}</option>
-            </select>
+            <InlineSelect :model-value="databaseDraft" :options="redisDatabaseOptions" ariaLabel="Redis 逻辑库" @change="applyDatabaseValue" />
           </label>
           <button :disabled="!canWrite" type="button" @click="createOpen = !createOpen">＋ 新增</button>
         </div>
 
-        <div class="redis-table-scroll">
+        <div class="redis-scan-summary">
+          <span>SCAN 游标分批加载</span>
+          <strong>{{ formatCount(overview?.keyCount) }} 个键</strong>
+        </div>
+
+        <div class="redis-table-scroll" @scroll.passive="handleKeyScroll">
           <table aria-label="Redis 键列表">
             <colgroup><col class="key-column" /><col class="type-column" /><col class="value-column" /><col class="ttl-column" /></colgroup>
             <thead><tr><th>键</th><th>类型</th><th>值</th><th>TTL</th></tr></thead>
             <tbody>
-              <tr v-for="node in visibleKeyRows" :key="node.id" :class="{ namespace: node.children.length, key: !!node.key }" @click="toggleTableNode(node)">
-                <td>
-                  <button class="redis-key-cell" :style="{ '--key-depth': node.depth }" type="button" :aria-label="node.children.length ? `展开 ${node.label}` : `打开 ${node.key}`">
-                    <span v-if="node.children.length" class="redis-chevron" :class="{ expanded: expandedNamespaces.has(node.id) }">›</span>
-                    <span v-else class="redis-key-spacer"></span>
-                    <svg v-if="node.children.length" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2-2h9v13h-17Z" /></svg>
-                    <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4v13H6Z" /><path d="M14 3.5v4h4" /></svg>
-                    <span :title="node.key || node.label">{{ node.label }}</span>
-                  </button>
-                </td>
-                <template v-if="node.key">
-                  <td><span class="redis-type" :class="keyDetails[node.key]?.type">{{ keyDetails[node.key]?.type || "…" }}</span></td>
-                  <td><span class="redis-value-preview" :title="valuePreview(keyDetails[node.key])">{{ valuePreview(keyDetails[node.key]) }}</span></td>
-                  <td><span class="redis-ttl">{{ keyDetails[node.key] ? formatTtl(keyDetails[node.key].ttlMs) : "—" }}</span></td>
-                </template>
-                <template v-else>
-                  <td><span class="namespace-type">命名空间</span></td><td><span class="namespace-count">{{ node.children.length }} 项</span></td><td></td>
-                </template>
+              <tr v-for="key in filteredKeys" :key="key" @click="openKey(key)">
+                <td><button class="redis-key-cell" type="button" :aria-label="`打开 ${key}`" :title="key">{{ key }}</button></td>
+                <td><span class="redis-type" :class="keyDetails[key]?.type">{{ keyDetails[key]?.type || "…" }}</span></td>
+                <td><span class="redis-value-preview" :title="valuePreview(keyDetails[key])">{{ valuePreview(keyDetails[key]) }}</span></td>
+                <td><span class="redis-ttl">{{ keyDetails[key] ? formatTtl(keyDetails[key].ttlMs) : "—" }}</span></td>
               </tr>
             </tbody>
           </table>
-          <div v-if="visibleKeyRows.length === 0" class="redis-tree-empty">没有匹配的键</div>
+          <div v-if="filteredKeys.length === 0" class="redis-tree-empty">没有匹配的键</div>
         </div>
 
-        <footer class="redis-table-footer">
-          <div><strong>DB {{ database }}</strong><span>{{ parseKeyspaceInfo(overview?.keyspace || "") }}</span></div>
-          <span>已加载 {{ keys.length }} / {{ formatCount(overview?.keyCount) }}</span>
-          <button v-if="hasMore" :disabled="loadingMore" type="button" @click="loadMore">{{ loadingMore ? "扫描中" : "加载更多" }}</button>
-          <span v-else>扫描完成</span>
-        </footer>
       </section>
 
       <section v-if="createOpen" class="redis-create-panel redis-create-floating">
@@ -1403,4 +1321,85 @@ button:disabled {
     transform: rotate(360deg);
   }
 }
+
+.redis-browser {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+  padding-bottom: var(--space-3);
+}
+.redis-browser-search,
+.redis-table-view,
+.key-identity,
+.ttl-console,
+.value-editor,
+.collection-view,
+.raw-value,
+.redis-create-panel {
+  border-color: var(--divider-color);
+  background: var(--card-background);
+}
+.redis-browser-search,
+.redis-table-view,
+.key-identity,
+.ttl-console,
+.value-editor,
+.collection-view,
+.raw-value,
+.redis-create-panel {
+  border-radius: var(--radius-card);
+}
+.redis-table-scroll,
+.value-editor textarea,
+.raw-value pre,
+.collection-row code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.redis-table-scroll th {
+  background: var(--input-background);
+  color: var(--primary);
+}
+.write-guard {
+  border-color: color-mix(in srgb, var(--warning) 36%, var(--divider-color));
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--warning) 7%, var(--card-background));
+}
+.write-guard:has(input) {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--divider-color));
+  background: color-mix(in srgb, var(--danger) 6%, var(--card-background));
+}
+.delete-key {
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--divider-color));
+  background: color-mix(in srgb, var(--danger) 7%, var(--card-background));
+}
+.redis-browser-search { min-height: 48px; border-radius: var(--radius-card); box-shadow: 0 5px 18px rgba(23, 32, 51, .035); }
+.redis-browser-search input { min-height: 46px; font-size: 12px; }
+.redis-table-view { overflow: hidden; box-shadow: 0 7px 22px rgba(23, 32, 51, .04); }
+.redis-table-view header { background: var(--primary-soft); }
+.key-identity, .ttl-console, .value-editor, .collection-view { box-shadow: 0 7px 22px rgba(23, 32, 51, .04); }
+/* Prototype list layout */
+.redis-browser { gap: 8px; }
+.redis-browser-search { min-height: 47px; border: 1px solid var(--divider-color); border-radius: 6px; box-shadow: none; }
+.redis-browser-search input { min-height: 45px; font-size: 12px; }
+.redis-browser-search button { display:grid; width:44px; place-items:center; border-left:1px solid var(--divider-color); font-size:0; }
+.redis-browser-search button::before { width: 16px; height: 12px; background: linear-gradient(var(--text-secondary),var(--text-secondary)) 0 0/16px 1px no-repeat,linear-gradient(var(--text-secondary),var(--text-secondary)) 3px 5px/10px 1px no-repeat,linear-gradient(var(--text-secondary),var(--text-secondary)) 6px 10px/4px 1px no-repeat; content:""; }
+.redis-table-view { height:auto; min-height:0; grid-template-rows:auto auto minmax(0,1fr); gap:0; margin:0; overflow:visible; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.redis-table-tools { grid-template-columns: minmax(0,1fr) minmax(0,1.28fr) auto; gap: 8px; }
+.redis-table-tools label { align-content:stretch; border:0; padding:0; }
+.redis-table-tools label span { margin-bottom: 6px; color: var(--text-secondary); font-size: 10px; }
+.redis-table-tools select,.redis-table-tools > button { min-height:44px; border:1px solid var(--divider-color); border-radius:6px; background:var(--input-background); padding:0 11px; font-size:11px; }
+.redis-table-tools label:nth-child(2) select { border-color: #e6a000; box-shadow: inset 0 0 0 1px #e6a000; }
+.redis-table-tools > button { background:var(--card-background); color:var(--primary); white-space:nowrap; }
+.redis-scan-summary { display:flex; min-height:43px; align-items:center; justify-content:space-between; padding:0 8px; color:var(--text-secondary); font-size:10px; }
+.redis-scan-summary strong { color:var(--text-primary); font-size:10px; }
+.redis-table-scroll { height:calc(100dvh - 350px); min-height:300px; max-height:none; border:1px solid var(--divider-color); border-radius:0; }
+.redis-table-scroll table { min-width:100%; font-size:10px; }
+.redis-table-scroll th { height:40px; background:var(--input-background); color:var(--text-secondary); }
+.redis-table-scroll td { height:40px; }
+.redis-key-cell { display:block; height:40px; overflow:hidden; padding:0 7px; font-size:10px; line-height:40px; text-overflow:ellipsis; white-space:nowrap; }
+.redis-type { border:1px solid #9dc8ff; border-radius:3px; background:#edf6ff; padding:2px 4px; color:var(--primary); font-size:8px; text-transform:uppercase; }
+.redis-table-footer { display:none; }
 </style>
