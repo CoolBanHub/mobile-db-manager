@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import QueryResultPanel from "./QueryResultPanel.vue";
-import { isMobileSqlDatabase } from "@/lib/databaseCapabilities";
+import postgresIcon from "@/assets/database-icons/postgres.svg";
+import redisIcon from "@/assets/database-icons/redis.svg";
+import mongodbIcon from "@/assets/database-icons/mongodb.svg";
+import sqlserverIcon from "@/assets/database-icons/sqlserver.svg";
+import etcdIcon from "@/assets/database-icons/etcd.svg";
+import { databaseCapability, isMobileSqlDatabase } from "@/lib/databaseCapabilities";
 import { loadDirectMetadata } from "@/lib/direct/metadata";
 import { loadDirectMongoCollections, loadDirectMongoDatabases } from "@/lib/direct/mongo";
 import { cancelDirectQuery, executeDirectQuery, explainDirectQuery } from "@/lib/direct/query";
 import { saveDirectSavedSql } from "@/lib/direct/savedSql";
 import type { ColumnInfo, DatabaseInfo, MobileConnectionSummary, MobileQueryDraft, QueryResult, SavedSqlFile, TableInfo } from "@/lib/mobileTypes";
 import { exportQueryResult, type QueryExportFormat } from "@/lib/queryExport";
-import { applySqlSuggestion, buildColumnCondition, buildTableSelect, editorKeywords, formatSql, mergeTableMetadata, sqlSuggestions, type SqlSuggestion } from "@/lib/sqlEditor";
+import { applySqlSuggestion, buildColumnCondition, buildTableSelect, currentSqlToken, editorKeywords, formatSql, isSqlRelationCompletion, mergeTableMetadata, sqlSuggestions, type SqlSuggestion } from "@/lib/sqlEditor";
 import { parseSqlParameterJson, resolveSqlParameters } from "@/lib/sqlParameters";
 
 type ExecutionMode = "safe" | "advanced";
@@ -25,6 +30,7 @@ const databases = ref<DatabaseInfo[]>([]);
 const schemas = ref<string[]>([]);
 const browsedTables = ref<TableInfo[]>([]);
 const tableSearchResults = ref<TableInfo[]>([]);
+const autocompleteTables = ref<TableInfo[]>([]);
 const tableSearch = ref("");
 const columns = ref<ColumnInfo[]>([]);
 const selectedTable = ref<TableInfo | null>(null);
@@ -58,7 +64,8 @@ const runMenuOpen = ref(false);
 const showSavePanel = ref(false);
 const activeResultTab = ref<"result" | "messages" | "plan" | "schema">("result");
 // 默认给结果区预留一行表头与数据的空间；仍可通过中间拖拽条扩大编辑器。
-const editorHeight = ref(150);
+const editorHeight = ref(200);
+const editorCursor = ref({ line: 1, column: 1 });
 const result = ref<QueryResult | null>(null);
 const error = ref("");
 const loadingContext = ref(false);
@@ -96,10 +103,14 @@ let exportRequestId = 0;
 let activeExecutionId: string | null = null;
 let lastExecutedSql = "";
 let tableSearchTimer: ReturnType<typeof setTimeout> | null = null;
+let autocompleteTimer: ReturnType<typeof setTimeout> | null = null;
+let autocompleteRequestId = 0;
 let stopEditorResize: (() => void) | null = null;
 
 const selectedConnection = computed(() => props.connections.find((item) => item.id === connectionId.value));
 const selectedDatabaseType = computed(() => selectedConnection.value?.dbType ?? "postgres");
+const selectedDatabaseLabel = computed(() => databaseCapability(selectedDatabaseType.value).label);
+const databaseTypeIcon = computed(() => selectedConnection.value ? ({ postgres: postgresIcon, redis: redisIcon, mongodb: mongodbIcon, sqlserver: sqlserverIcon, etcd: etcdIcon }[selectedDatabaseType.value] ?? "") : "");
 const queryExecutionSupported = computed(() => Boolean(selectedConnection.value && isMobileSqlDatabase(selectedConnection.value.dbType)));
 const schemaContextLabel = computed(() => (selectedDatabaseType.value === "redis" ? "Redis 命令" : selectedDatabaseType.value === "mongodb" ? "MongoDB 集合" : "默认 Schema"));
 const editorPlaceholder = computed(() => {
@@ -123,7 +134,7 @@ const chartRows = computed(() => {
   const maximum = Math.max(1, ...values.map((item) => Math.abs(item.value)));
   return values.map((item) => ({ ...item, width: (Math.abs(item.value) / maximum) * 100 }));
 });
-const tables = computed(() => mergeTableMetadata(browsedTables.value, tableSearchResults.value));
+const tables = computed(() => mergeTableMetadata(mergeTableMetadata(browsedTables.value, tableSearchResults.value), autocompleteTables.value));
 const visibleTables = computed(() => (tableSearch.value.trim() ? tableSearchResults.value : browsedTables.value));
 const hasMoreTables = computed(() => (tableSearch.value.trim() ? searchResultsHaveMore.value : browsedTablesHaveMore.value));
 const usesTableContextPicker = computed(() => selectedDatabaseType.value === "mysql" || selectedDatabaseType.value === "mongodb");
@@ -275,6 +286,10 @@ async function selectConnection(preferredDatabase?: string, preferredSchema?: st
   schemas.value = [];
   browsedTables.value = [];
   tableSearchResults.value = [];
+  autocompleteTables.value = [];
+  autocompleteRequestId++;
+  if (autocompleteTimer) clearTimeout(autocompleteTimer);
+  autocompleteTimer = null;
   tableSearch.value = "";
   columnsByTable.value = {};
   loadingMetadata.value = false;
@@ -322,6 +337,8 @@ async function selectConnection(preferredDatabase?: string, preferredSchema?: st
 async function selectDatabase(preferredSchema?: string | null) {
   invalidateQuery();
   const requestId = ++schemaRequestId;
+  autocompleteRequestId++;
+  autocompleteTables.value = [];
   const requestedConnectionId = connectionId.value;
   const requestedDatabase = database.value;
   schema.value = "";
@@ -365,6 +382,10 @@ async function loadTables() {
   const requestId = ++tableRequestId;
   if (tableSearchTimer) clearTimeout(tableSearchTimer);
   tableSearchTimer = null;
+  autocompleteRequestId++;
+  if (autocompleteTimer) clearTimeout(autocompleteTimer);
+  autocompleteTimer = null;
+  autocompleteTables.value = [];
   browsedTables.value = [];
   tableSearchResults.value = [];
   tableSearch.value = "";
@@ -528,13 +549,55 @@ function updateSuggestions() {
   selectedSuggestionIndex.value = 0;
   const beforeCaret = sql.value.slice(0, editor.selectionStart);
   const lines = beforeCaret.split("\n");
+  editorCursor.value = { line: lines.length, column: (lines.at(-1)?.length ?? 0) + 1 };
   const popupWidth = Math.min(230, Math.max(180, editor.clientWidth - 16));
   const maxPopupLeft = Math.max(8, editor.clientWidth - popupWidth - 8);
   suggestionPosition.value = {
     top: `${Math.min(20 + lines.length * 20, 210)}px`,
     left: `${Math.min(42 + (lines.at(-1)?.length ?? 0) * 7.2, maxPopupLeft)}px`,
   };
+  scheduleRelationAutocomplete(editor.selectionStart);
   void hydrateSuggestionContext(beforeCaret);
+}
+
+function scheduleRelationAutocomplete(caret: number) {
+  if (autocompleteTimer) clearTimeout(autocompleteTimer);
+  autocompleteTimer = null;
+  if (!queryExecutionSupported.value || !database.value || !isSqlRelationCompletion(sql.value, caret)) return;
+  const token = currentSqlToken(sql.value, caret).trim();
+  if (!token) return;
+  const requestedSql = sql.value;
+  const requestedConnectionId = connectionId.value;
+  const requestedDatabase = database.value;
+  const requestedSchema = schema.value;
+  autocompleteTimer = setTimeout(async () => {
+    autocompleteTimer = null;
+    const requestId = ++autocompleteRequestId;
+    try {
+      const matches = await loadDirectMetadata<TableInfo[]>("tables", {
+        connectionId: requestedConnectionId,
+        database: requestedDatabase,
+        schema: requestedSchema,
+        filter: token,
+        limit: 30,
+        offset: 0,
+      });
+      const editor = editorElement.value;
+      if (
+        requestId !== autocompleteRequestId ||
+        connectionId.value !== requestedConnectionId ||
+        database.value !== requestedDatabase ||
+        schema.value !== requestedSchema ||
+        sql.value !== requestedSql ||
+        !editor
+      ) return;
+      autocompleteTables.value = mergeTableMetadata(autocompleteTables.value, matches);
+      suggestions.value = sqlSuggestions(sql.value, editor.selectionStart, tables.value, suggestionColumns.value, selectedDatabaseType.value);
+      selectedSuggestionIndex.value = 0;
+    } catch {
+      // 自动补全失败不影响编辑器输入；用户仍可从已加载的元数据中选择。
+    }
+  }, 180);
 }
 
 async function hydrateSuggestionContext(beforeCaret: string) {
@@ -860,6 +923,8 @@ onBeforeUnmount(() => {
   schemaRequestId++;
   tableRequestId++;
   if (tableSearchTimer) clearTimeout(tableSearchTimer);
+  autocompleteRequestId++;
+  if (autocompleteTimer) clearTimeout(autocompleteTimer);
   stopEditorResize?.();
   invalidateQuery();
 });
@@ -1009,41 +1074,69 @@ defineExpose({ handleBack });
 
 <template>
   <div class="query-workbench">
-    <section class="query-connection-bar">
-      <button class="query-back" type="button" aria-label="返回" @click="emit('back')">‹</button>
-      <label
-        ><select v-model="connectionId" aria-label="查询连接" @change="selectConnection()">
+    <header class="query-topbar">
+      <button class="query-back" type="button" aria-label="返回" @click="emit('back')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+      </button>
+      <div class="query-page-title">
+        <strong>SQL 查询</strong>
+        <small>直接连接 · 本机安全执行</small>
+      </div>
+      <label class="query-file-button" aria-label="打开 SQL 文件">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2-2h7A2.5 2.5 0 0 1 21 8v9.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5V8a.5.5 0 0 1 .5-.5Z" /></svg>
+        <input type="file" accept=".sql,.txt,text/plain,application/sql" @change="openSqlFile" />
+      </label>
+      <button class="query-more" type="button" aria-label="更多与主题设置" @click="emit('more')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></svg>
+      </button>
+    </header>
+
+    <section class="query-context-card">
+      <div class="query-connection-summary">
+        <span class="query-database-mark" aria-hidden="true">
+          <img v-if="databaseTypeIcon" :src="databaseTypeIcon" :alt="selectedDatabaseLabel" />
+          <svg v-else viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7" ry="2.7" /><path d="M5 5.5v6c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7v-6M5 11.5v6c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7v-6" /></svg>
+        </span>
+        <div>
+          <strong>{{ selectedConnection?.name || "选择数据库连接" }}</strong>
+          <small v-if="selectedConnection"><i></i>{{ selectedDatabaseLabel }} · 已连接</small>
+          <small v-else>连接后加载数据库结构与输入联想</small>
+        </div>
+        <label class="query-connection-picker">
+          <select v-model="connectionId" aria-label="查询连接" @change="selectConnection()">
           <option value="">选择连接</option>
           <option v-for="item in connections" :key="item.id" :value="item.id">{{ item.name }}</option>
-        </select></label
-      >
-      <div>
-        <strong>{{ selectedConnection?.name || "选择数据库连接" }}</strong>
-        <small v-if="selectedConnection">{{ selectedConnection.host }}:{{ selectedConnection.port }} · <i></i> 已连接</small>
-        <small v-else>连接后加载数据库结构与输入联想</small>
+          </select>
+        </label>
+        <span class="query-switch-label">切换</span>
+        <div class="query-context-selectors">
+          <label>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="5.5" ry="2.2" /><path d="M6.5 6v5c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V6M6.5 11v5c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2v-5" /></svg>
+            <span>数据库</span>
+            <select v-model="database" :disabled="!connectionId || loadingContext" aria-label="数据库" @change="selectDatabase()">
+              <option value="">选择数据库</option>
+              <option v-for="item in databases" :key="item.name" :value="item.name">{{ item.name }}</option>
+            </select>
+          </label>
+          <label>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1" /><path d="M5 10h14M10 5v14" /></svg>
+            <span>{{ usesTableContextPicker ? (selectedDatabaseType === "mongodb" ? "集合" : "表") : "Schema" }}</span>
+            <select v-if="usesTableContextPicker" :value="selectedTable?.name || ''" :disabled="!database || loadingMetadata" aria-label="表或集合" @change="selectContextTable">
+              <option value="">{{ selectedDatabaseType === "mongodb" ? "选择集合" : "选择表" }}</option>
+              <option v-for="item in tables" :key="`${item.parent_schema ?? ''}:${item.name}`" :value="item.name">{{ item.name }}</option>
+            </select>
+            <select v-else v-model="schema" :disabled="schemas.length === 0" aria-label="Schema" @change="selectSchema">
+              <option value="">{{ schemaContextLabel }}</option>
+              <option v-for="item in schemas" :key="item" :value="item">{{ item }}</option>
+            </select>
+          </label>
+          <button type="button" aria-label="刷新元数据" @click="selectDatabase(schema)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6.1 8a7 7 0 0 1 11.7-1L20 12M4 12l2.2 5a7 7 0 0 0 11.7-1" /></svg>
+          </button>
+        </div>
       </div>
-      <button type="button" aria-label="新建查询" @click="createQueryTab">＋</button>
-      <label class="query-file-button" aria-label="打开 SQL 文件">▱<input type="file" accept=".sql,.txt,text/plain,application/sql" @change="openSqlFile" /></label>
-      <button type="button" aria-label="保存 SQL" @click="showSavePanel = !showSavePanel">▣</button>
-      <button type="button" aria-label="更多与主题设置" @click="emit('more')">⋮</button>
     </section>
-    <div class="context-path">
-      <span class="context-database-icon" aria-hidden="true">◉</span>
-      <select v-model="database" :disabled="!connectionId || loadingContext" aria-label="数据库" @change="selectDatabase()">
-        <option value="">选择数据库</option>
-        <option v-for="item in databases" :key="item.name" :value="item.name">{{ item.name }}</option>
-      </select>
-      <b>/</b>
-      <select v-if="usesTableContextPicker" :value="selectedTable?.name || ''" :disabled="!database || loadingMetadata" aria-label="表或集合" @change="selectContextTable">
-        <option value="">{{ selectedDatabaseType === "mongodb" ? "选择集合" : "选择表" }}</option>
-        <option v-for="item in tables" :key="`${item.parent_schema ?? ''}:${item.name}`" :value="item.name">{{ item.name }}</option>
-      </select>
-      <select v-else v-model="schema" :disabled="schemas.length === 0" aria-label="Schema" @change="selectSchema">
-        <option value="">{{ schemaContextLabel }}</option>
-        <option v-for="item in schemas" :key="item" :value="item">{{ item }}</option>
-      </select>
-      <button type="button" aria-label="刷新元数据" @click="selectDatabase(schema)">↻</button>
-    </div>
+
     <nav class="query-tabs" aria-label="查询标签">
       <button v-for="tab in queryTabs" :key="tab.id" :class="{ active: activeQueryTabId === tab.id }" type="button" @click="selectQueryTab(tab.id)">
         {{ tab.title }} <span role="button" tabindex="0" :aria-label="`关闭${tab.title}`" @click.stop="closeQueryTab(tab.id)" @keydown.enter.stop="closeQueryTab(tab.id)">×</span>
@@ -1054,7 +1147,7 @@ defineExpose({ handleBack });
       <div class="query-toolbar">
         <div class="run-control">
           <button :disabled="executing || !queryExecutionSupported || !database || !sql.trim() || !advancedExecutionReady" type="button" @click="runSelected">
-            ▶ <span>{{ executing ? "运行中" : "运行" }}</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 10 7-10 7Z" /></svg><span>{{ executing ? "运行中" : "运行" }}</span>
           </button>
           <button :disabled="executing || !queryExecutionSupported" type="button" aria-label="运行选项" @click="runMenuOpen = !runMenuOpen">⌄</button>
           <div v-if="runMenuOpen" class="run-menu">
@@ -1062,12 +1155,10 @@ defineExpose({ handleBack });
             <button :disabled="!advancedExecutionReady" type="button" @click="runAll">运行全部</button>
           </div>
         </div>
-        <button :disabled="!executing || cancelling" type="button" @click="cancelQuery">■ <span>停止</span></button>
-        <i></i>
-        <button :disabled="explaining || !queryExecutionSupported || !database || !sql.trim()" type="button" @click="explainQuery">≋ <span>解释</span></button>
-        <i></i>
-        <button type="button" @click="formatCurrentSql">〈〉 <span>格式化</span></button>
-        <button type="button" aria-label="切换执行模式" @click="toggleExecutionMode">⋮</button>
+        <button :disabled="!executing || cancelling" type="button" @click="cancelQuery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="8" height="8" /></svg><span>停止</span></button>
+        <button :disabled="explaining || !queryExecutionSupported || !database || !sql.trim()" type="button" @click="explainQuery"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4M11 8v4l3 2" /></svg><span>解释</span></button>
+        <button type="button" @click="formatCurrentSql"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h8M4 17h14M17 5l3 2-3 2" /></svg><span>格式化</span></button>
+        <button class="query-toolbar-more" type="button" aria-label="切换执行模式" @click="toggleExecutionMode"><b>⋮</b><span>更多</span></button>
       </div>
       <div v-if="advancedMode" class="advanced-guard">
         <label>
@@ -1084,6 +1175,7 @@ defineExpose({ handleBack });
           <pre class="sql-highlight" aria-hidden="true" v-html="highlightedSql"></pre>
           <textarea ref="editorElement" v-model="sql" spellcheck="false" autocapitalize="none" autocomplete="off" :placeholder="editorPlaceholder" aria-label="数据库查询编辑器" @click="updateSuggestions" @input="updateSuggestions" @keydown="handleEditorKeydown"></textarea>
           <div v-if="suggestions.length" class="suggestion-list" :style="suggestionPosition" role="listbox" aria-label="SQL 自动补全">
+            <header><span>{{ suggestions.some((item) => item.kind === "table") ? "表与视图" : "智能联想" }}</span><kbd>Tab</kbd></header>
             <button v-for="(suggestion, index) in suggestions" :key="`${suggestion.kind}:${suggestion.label}`" :class="{ selected: selectedSuggestionIndex === index }" type="button" role="option" :aria-selected="selectedSuggestionIndex === index" @mousedown.prevent="acceptSuggestion(suggestion)">
               <i :data-kind="suggestion.kind">{{ suggestion.kind.slice(0, 2).toUpperCase() }}</i>
               <strong>{{ suggestion.label }}</strong>
@@ -1093,9 +1185,11 @@ defineExpose({ handleBack });
         </div>
       </div>
       <div class="editor-tools">
-        <button type="button" @click="showParameters = !showParameters">参数</button>
-        <button :class="{ active: activeResultTab === 'schema' }" type="button" @click="activeResultTab = 'schema'">Schema 联想</button>
-        <small>Ln {{ editorLineCount }} · UTF-8 · {{ selectedConnection?.dbType || "SQL" }}</small>
+        <div>
+          <button type="button" @click="showParameters = !showParameters">⌁ 参数</button>
+          <button :class="{ active: activeResultTab === 'schema' }" type="button" @click="activeResultTab = 'schema'">Schema: {{ schema || "默认" }}</button>
+        </div>
+        <small>Ln {{ editorCursor.line }}, Col {{ editorCursor.column }} · UTF-8 · {{ selectedDatabaseLabel }}</small>
       </div>
       <div v-if="showParameters" class="parameter-editor">
         <span>JSON PARAMETERS · 支持 :name、${name}、&#123;&#123;name&#125;&#125;</span>
@@ -1112,7 +1206,7 @@ defineExpose({ handleBack });
     </div>
     <div class="editor-result-resizer" role="separator" aria-label="调整编辑器与结果区高度" aria-orientation="horizontal" :aria-valuenow="editorHeight" tabindex="0" @pointerdown="startEditorResize" @keydown="handleResizeKeydown"><i></i></div>
     <nav class="result-tabs" aria-label="查询输出">
-      <button :class="{ active: activeResultTab === 'result' }" type="button" @click="activeResultTab = 'result'">结果 1</button>
+      <button :class="{ active: activeResultTab === 'result' }" type="button" @click="activeResultTab = 'result'">结果 <i>{{ result?.rows.length ?? 0 }}</i></button>
       <button :class="{ active: activeResultTab === 'messages' }" type="button" @click="activeResultTab = 'messages'">消息</button>
       <button :class="{ active: activeResultTab === 'plan' }" type="button" @click="activeResultTab = 'plan'">执行计划</button>
       <button :class="{ active: activeResultTab === 'schema' }" type="button" @click="activeResultTab = 'schema'">
@@ -2776,5 +2870,654 @@ td.null {
   .result-tabs button {
     padding-inline: 9px;
   }
+}
+
+/* Reference-matched mobile SQL workbench. Query behaviour, syntax overlay and
+   completion popover continue to use the existing editor implementation. */
+.query-workbench {
+  display: block;
+  width: calc(100% + var(--page-inline) * 2);
+  max-width: none;
+  min-height: calc(100dvh - var(--page-top-safe) - var(--bottom-nav-height));
+  margin: calc(var(--space-1) * -1) calc(var(--page-inline) * -1) 0;
+  padding: 0 0 18px;
+  background: #ffffff;
+}
+.query-topbar {
+  display: grid;
+  min-height: 66px;
+  grid-template-columns: 34px minmax(0, 1fr) 42px 36px;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid #e1e7ef;
+  padding: 0 15px;
+  background: #fff;
+}
+.query-topbar button,
+.query-file-button {
+  display: grid;
+  width: 36px;
+  height: 42px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #202b3c;
+}
+.query-topbar svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+.query-topbar .query-back {
+  justify-self: start;
+  margin-left: -8px;
+}
+.query-page-title {
+  display: grid;
+  gap: 2px;
+}
+.query-page-title strong {
+  color: #1d2738;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.query-page-title small {
+  color: #718097;
+  font-size: 10px;
+}
+.query-file-button {
+  position: relative;
+  margin: 0;
+}
+.query-file-button input,
+.query-connection-picker select {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.query-context-card {
+  border-bottom: 1px solid #dde4ed;
+  background: #f4f7fb;
+  padding: 11px 18px 10px;
+}
+.query-connection-summary {
+  position: relative;
+  display: grid;
+  min-height: 89px;
+  grid-template-columns: 36px minmax(0, 1fr) 38px;
+  grid-template-rows: 45px 34px;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 5px;
+  border: 1px solid #dce3ec;
+  border-radius: 13px;
+  background: #fff;
+  padding: 8px 10px 8px 12px;
+  box-shadow: 0 4px 14px rgba(51, 72, 100, 0.035);
+}
+.query-database-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 10px;
+  background: #eaf3ff;
+  color: #0878ff;
+}
+.query-database-mark svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+}
+.query-connection-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.query-connection-summary strong,
+.query-connection-summary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.query-connection-summary strong {
+  color: #263246;
+  font-size: 14px;
+  font-weight: 680;
+}
+.query-connection-summary small {
+  color: #718097;
+  font-size: 10px;
+}
+.query-connection-summary small i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #21b66f;
+  vertical-align: 1px;
+}
+.query-connection-picker {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 52px;
+  left: 12px;
+  height: 45px;
+}
+.query-connection-summary > button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  justify-self: end;
+  border: 0;
+  background: transparent;
+  color: #697c94;
+}
+.query-connection-summary > button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+.query-context-selectors {
+  display: grid !important;
+  grid-column: 1 / -1;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px !important;
+}
+.query-context-selectors label {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  height: 34px;
+  overflow: hidden;
+  border: 1px solid #d8e1ec;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+.query-context-selectors label > svg {
+  width: 15px;
+  height: 15px;
+  justify-self: center;
+  fill: none;
+  stroke: #8495aa;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.3;
+}
+.query-context-selectors label::after {
+  content: "⌄";
+  position: absolute;
+  right: 9px;
+  color: #9aabc0;
+  font-size: 10px;
+  pointer-events: none;
+}
+.query-context-selectors select {
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0 25px 0 0;
+  color: #46556c;
+  font-size: 10px;
+  text-align: center;
+}
+.query-tabs {
+  position: relative;
+  display: flex;
+  min-height: 42px;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+  border: 0;
+  border-bottom: 1px solid #dce3ec;
+  padding: 0 42px 0 14px;
+  background: #fff;
+  scrollbar-width: none;
+}
+.query-tabs button {
+  flex: 0 0 auto;
+  min-width: 77px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #596980;
+  font-size: 11px;
+}
+.query-tabs button.active {
+  color: #0878ff;
+  font-weight: 680;
+  box-shadow: inset 0 -2px #0878ff;
+}
+.query-tabs button span {
+  margin-left: 3px;
+  color: #91a0b4;
+}
+.query-tabs button:last-child {
+  position: absolute;
+  right: 0;
+  width: 42px;
+  min-width: 42px;
+  border-left: 1px solid #e1e7ee;
+  color: #77889e;
+  font-size: 17px;
+}
+.editor {
+  display: flex;
+  overflow: visible;
+  flex-direction: column;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+.query-toolbar {
+  order: 1;
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  gap: 2px;
+  overflow: visible;
+  border-bottom: 1px solid #dce3ec;
+  padding: 5px 13px;
+  background: #fff;
+}
+.run-control {
+  position: relative;
+  display: flex;
+  height: 44px;
+  margin: 0 5px 0 0;
+  border-radius: 10px;
+  background: #eaf3ff;
+}
+.query-toolbar > button,
+.run-control > button {
+  display: flex;
+  min-width: 48px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0 8px;
+  color: #62738a;
+  font-size: 9px;
+}
+.run-control > button:first-child {
+  min-width: 55px;
+  align-items: center;
+  flex-direction: row;
+  gap: 5px;
+  padding-right: 2px;
+  color: #0878ff;
+  font-size: 11px;
+  font-weight: 680;
+}
+.run-control > button:nth-child(2) {
+  min-width: 17px;
+  padding: 0 5px 0 0;
+  color: #0878ff;
+}
+.query-toolbar button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+.run-control > button:first-child svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  stroke: none;
+}
+.query-toolbar button span {
+  margin: 0;
+  font-size: 9px;
+}
+.query-toolbar > button:disabled {
+  color: #b4c0ce;
+  opacity: 1;
+}
+.query-toolbar > .query-toolbar-more {
+  min-width: 38px;
+  margin-left: auto;
+  color: #405269;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.run-menu {
+  top: 47px;
+}
+.advanced-guard { order: 2; }
+.code-editor {
+  order: 3;
+  min-height: 248px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  border-bottom: 1px solid #dce3ec;
+  background: #fff;
+}
+.line-numbers {
+  border-right: 1px solid #e3e9f0;
+  padding: 14px 9px;
+  color: #8fa2bb;
+  font: 10px/1.9 "Azeret Mono Variable", monospace;
+}
+.line-numbers span { height: 19px; }
+.editor-input textarea,
+.sql-highlight {
+  padding: 14px 13px;
+  font: 11px/1.73 "Azeret Mono Variable", monospace;
+  letter-spacing: .015em;
+}
+.editor-tools {
+  order: 4;
+  display: flex;
+  min-height: 33px;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 0;
+  background: #fff;
+}
+.editor-tools > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 15px;
+}
+.editor-tools button {
+  min-width: 0;
+  min-height: 23px;
+  border: 1px solid #dce4ed;
+  border-radius: 6px;
+  background: #fbfcfe;
+  padding: 0 8px;
+  color: #64758b;
+  font-size: 8px;
+}
+.editor-tools button.active {
+  background: #fbfcfe;
+  color: #64758b;
+}
+.editor-tools small {
+  padding: 0 14px 0 8px;
+  color: #66768b;
+  font-size: 8px;
+}
+.parameter-editor { order: 5; }
+.save-sql { order: 6; }
+.editor-result-resizer {
+  min-height: 18px;
+  border: 0;
+  border-top: 1px solid #dce3ec;
+  border-bottom: 1px solid #dce3ec;
+  background: #f6f8fb;
+}
+.editor-result-resizer i {
+  width: 38px;
+  height: 4px;
+  background: #cbd7e5;
+}
+.result-tabs {
+  display: grid;
+  min-height: 45px;
+  grid-template-columns: 54px 48px 66px minmax(100px, 1fr);
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid #dce3ec;
+  border-radius: 0;
+  background: #fff;
+}
+.result-tabs button {
+  min-height: 45px;
+  border: 0;
+  background: transparent;
+  padding: 0 7px;
+  color: #586981;
+  font-size: 9px;
+}
+.result-tabs button.active {
+  color: #0878ff;
+  font-weight: 680;
+  box-shadow: inset 0 -2px #0878ff;
+}
+.result-tabs button i {
+  width: 16px;
+  height: 16px;
+  background: #0878ff;
+  color: #fff;
+  font-size: 7px;
+}
+.message-panel,
+.explain-panel,
+.query-builder,
+.query-error {
+  margin: 0;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+@media (max-width: 360px) {
+  .query-toolbar > button,
+  .run-control > button { min-width: 42px; }
+  .query-toolbar button span { display: inline; }
+  .editor-tools small { font-size: 7px; }
+}
+
+/* Final production alignment with the approved compact HTML prototype. */
+.query-topbar {
+  min-height: 61px;
+}
+.query-context-card {
+  padding: 8px 14px 9px;
+  background: #f2f6fb;
+}
+.query-connection-summary {
+  min-height: 88px;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  grid-template-rows: 45px 35px;
+  column-gap: 9px;
+  row-gap: 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+.query-database-mark {
+  border: 1px solid #dbe4ef;
+  background: #fff;
+}
+.query-database-mark img {
+  width: 25px;
+  height: 25px;
+  object-fit: contain;
+}
+.query-connection-summary strong { font-size: 13px; }
+.query-connection-summary small { font-size: 9px; }
+.query-connection-picker {
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 45px;
+}
+.query-switch-label {
+  z-index: 3;
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  color: #0878ff;
+  font-size: 9px;
+  pointer-events: none;
+}
+.query-context-selectors {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 38px;
+  gap: 7px !important;
+}
+.query-context-selectors label {
+  height: 35px;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding-left: 9px;
+  background: #fff;
+}
+.query-context-selectors label > svg {
+  display: none;
+}
+.query-context-selectors label > span {
+  color: #98a2b3;
+  font-size: 8px;
+}
+.query-context-selectors label::after { display: none; }
+.query-context-selectors select {
+  height: 33px;
+  min-height: 33px;
+  padding: 0;
+  color: #263246;
+  font-size: 10px;
+  text-align: right;
+}
+.query-context-selectors > button {
+  display: grid;
+  width: 38px;
+  height: 35px;
+  place-items: center;
+  border: 1px solid #d8e1ec;
+  border-radius: 8px;
+  background: #fff;
+  color: #6a7e98;
+}
+.query-context-selectors > button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+.query-tabs { min-height: 40px; }
+.query-tabs button { min-height: 40px; font-size: 10px; }
+.query-toolbar {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: 1.18fr repeat(4, 1fr);
+  gap: 3px;
+  padding: 3px 8px;
+}
+.run-control {
+  display: grid;
+  width: 100%;
+  height: 34px;
+  grid-template-columns: minmax(0, 1fr) 22px;
+  align-items: center;
+  margin: 0;
+  border-radius: 8px;
+}
+.query-toolbar > button,
+.run-control > button {
+  min-width: 0;
+  min-height: 34px;
+  height: 34px;
+}
+.run-control > button:first-child {
+  min-width: 0;
+  justify-content: center;
+  gap: 5px;
+  padding: 0;
+}
+.run-control > button:nth-child(2) {
+  min-width: 22px;
+  width: 22px;
+  padding: 0;
+}
+.query-toolbar > button {
+  flex-direction: row;
+  gap: 5px;
+  padding: 0 3px;
+}
+.query-toolbar > button svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.query-toolbar button span {
+  white-space: nowrap;
+  font-size: 8px;
+}
+.query-toolbar > .query-toolbar-more {
+  min-width: 0;
+  margin: 0;
+  color: #62738a;
+  font-size: inherit;
+  letter-spacing: 0;
+}
+.query-toolbar-more b {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+.run-menu { top: 39px; left: 0; }
+.code-editor { min-height: 200px; }
+.suggestion-list {
+  overflow: hidden;
+  border-color: #cfdae8;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(42, 63, 91, .18);
+}
+.suggestion-list header {
+  display: flex;
+  height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e1e7ee;
+  padding: 0 10px;
+  color: #798a9f;
+  font-size: 8px;
+}
+.suggestion-list header kbd {
+  border: 1px solid #d7e0eb;
+  border-radius: 4px;
+  background: #f5f7fa;
+  padding: 2px 5px;
+  font: 7px inherit;
+}
+.suggestion-list button { min-height: 44px; }
+.suggestion-list button.selected { background: #eaf3ff; }
+.editor-result-resizer { min-height: 15px; }
+.result-tabs { min-height: 39px; }
+.result-tabs button { min-height: 39px; }
+@media (max-width: 360px) {
+  .query-toolbar > button,
+  .run-control > button { min-width: 0; }
+  .query-toolbar button span { display: inline; }
 }
 </style>

@@ -59,7 +59,7 @@ SSH tunnel, HTTP CONNECT proxy.
 - Browse etcd v3 JSON Gateway prefixes, inspect key details, and write single
   keys.
 - Use TLS, SSH local port forwarding, and HTTP CONNECT proxy tunnels.
-- Format SQL, use named JSON parameters, autocomplete metadata, cancel queries,
+- Format SQL, use named JSON parameters, autocomplete contextual metadata (tables/views after `FROM` or `JOIN`, and columns from referenced tables), cancel queries,
   store query history, save local SQL snippets, and share exported results.
   Advanced SQL is always guarded as potentially writable: read-only connections
   cannot run it, and Production requires one-shot confirmation plus the full

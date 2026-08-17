@@ -12,6 +12,7 @@ import MongoDataBrowser from "@/features/browse/mongo/MongoDataBrowser.vue";
 import MetadataBrowser from "@/features/browse/relational/MetadataBrowser.vue";
 import RedisDataBrowser from "@/features/browse/redis/RedisDataBrowser.vue";
 import ConnectionManager from "@/features/connections/ConnectionManager.vue";
+import QueryLanding from "@/features/query/QueryLanding.vue";
 import QueryWorkbench from "@/features/query/QueryWorkbench.vue";
 import SettingsPage from "@/features/settings/SettingsPage.vue";
 import UpdateBanner from "@/features/update/UpdateBanner.vue";
@@ -36,6 +37,7 @@ const connectionsLoading = ref(true);
 const connectionsError = ref("");
 const browsingConnection = ref<MobileConnectionSummary | null>(null);
 const queryDraft = ref<MobileQueryDraft | null>(null);
+const queryWorkspaceOpen = ref(false);
 const connectionManager = ref<BackHandler | null>(null);
 const metadataBrowser = ref<BrowseHandler | null>(null);
 const mongoDataBrowser = ref<BrowseHandler | null>(null);
@@ -74,7 +76,7 @@ const LAST_BROWSE_CONNECTION_KEY = "mobile-db-last-browse-connection";
 const LEGACY_LAST_BROWSE_CONNECTION_KEY = "dbx-last-browse-connection";
 const INTERFACE_DENSITY_KEY = "mobile-db-interface-density";
 const UPDATE_DISMISSED_TAG_KEY = "mobile-db-dismissed-update-tag";
-const PAGE_SWIPE_IGNORED_SELECTOR = "input, textarea, select, [role='dialog'], [role='separator'], .result-scroll, .query-tabs, .object-tabs, .detail-tabs, .schema-switcher, .update-banner";
+const PAGE_SWIPE_IGNORED_SELECTOR = "button, label, input, textarea, select, [role='dialog'], [role='separator'], .result-scroll, .query-tabs, .object-tabs, .detail-tabs, .schema-switcher, .update-banner";
 
 async function loadConnections() {
   connectionsLoading.value = true;
@@ -103,7 +105,13 @@ function navigateTo(section: MobileSection) {
 
 function openQueryDraft(draft: Omit<MobileQueryDraft, "nonce">) {
   queryDraft.value = { ...draft, nonce: ++queryDraftNonce };
+  queryWorkspaceOpen.value = true;
   navigateTo("query");
+}
+
+function createQuery() {
+  queryDraft.value = null;
+  queryWorkspaceOpen.value = true;
 }
 
 function sectionLabel(section: MobileSection) {
@@ -138,6 +146,7 @@ function openQueryFromBrowse() {
   const lastConnectionId = localStorage.getItem(LAST_BROWSE_CONNECTION_KEY) ?? localStorage.getItem(LEGACY_LAST_BROWSE_CONNECTION_KEY);
   const fallbackConnection = browsingConnection.value ?? connections.value.find((connection) => connection.id === lastConnectionId) ?? null;
   if (!fallbackConnection || !queryConnections.value.some((connection) => connection.id === fallbackConnection.id)) {
+    queryWorkspaceOpen.value = false;
     navigateTo("query");
     return;
   }
@@ -299,6 +308,11 @@ function dismissUpdate() {
 }
 
 function leaveQuery() {
+  if (queryWorkspaceOpen.value) {
+    queryWorkspaceOpen.value = false;
+    queryDraft.value = null;
+    return;
+  }
   const previousSection = sectionHistory.value.pop();
   activeSection.value = previousSection && previousSection !== "query" ? previousSection : "connections";
 }
@@ -319,6 +333,12 @@ function activeContentHandlesBack() {
 
 function handleHardwareBack() {
   if (activeContentHandlesBack()) return;
+
+  if (activeSection.value === "query" && queryWorkspaceOpen.value) {
+    queryWorkspaceOpen.value = false;
+    queryDraft.value = null;
+    return;
+  }
 
   if (activeSection.value === "connections" && browsingConnection.value) {
     browsingConnection.value = null;
@@ -382,7 +402,7 @@ onBeforeUnmount(() => {
           @back="browsingConnection = null"
           @action="focusConnectionSearch"
         />
-        <UpdateBanner v-if="visibleUpdateState" :state="visibleUpdateState" :info="updateInfo" :message="updateMessage" @check="checkForUpdates(true)" @download="downloadUpdate" @dismiss="dismissUpdate" />
+        <UpdateBanner v-if="visibleUpdateState && activeSection !== 'query'" :state="visibleUpdateState" :info="updateInfo" :message="updateMessage" @check="checkForUpdates(true)" @download="downloadUpdate" @dismiss="dismissUpdate" />
 
         <div v-if="activeSection === 'connections'">
           <PageState v-if="connectionsLoading" compact kind="loading" title="正在读取本机连接" description="安全存储中的连接信息正在加载。" />
@@ -397,7 +417,10 @@ onBeforeUnmount(() => {
           </template>
         </div>
 
-        <QueryWorkbench v-else-if="activeSection === 'query'" ref="queryWorkbench" :connections="queryConnections" :draft="queryDraft" @back="leaveQuery" @draft-consumed="queryDraft = null" />
+        <template v-else-if="activeSection === 'query'">
+          <QueryWorkbench v-if="queryWorkspaceOpen" ref="queryWorkbench" :connections="queryConnections" :draft="queryDraft" @back="leaveQuery" @draft-consumed="queryDraft = null" />
+          <QueryLanding v-else @create="createQuery" />
+        </template>
         <SettingsPage
           v-else-if="activeSection === 'settings'"
           ref="settingsPage"

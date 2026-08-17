@@ -132,11 +132,19 @@ export function currentSqlToken(sql: string, caret: number): string {
   return sql.slice(0, caret).match(/[A-Za-z_$][A-Za-z0-9_$]*$/)?.[0] ?? "";
 }
 
+export function isSqlRelationCompletion(sql: string, caret: number): boolean {
+  const token = currentSqlToken(sql, caret);
+  const prefix = sql.slice(0, Math.max(0, caret - token.length));
+  // FROM/JOIN 等关系位置只展示表与视图，避免字段和关键字淹没真正需要的对象。
+  return /\b(?:from|join|update|into)\s+(?:(?:[A-Za-z_$][A-Za-z0-9_$]*|"[^"]+"|`[^`]+`|\[[^\]]+\])\s*\.\s*)?$/i.test(prefix);
+}
+
 export function sqlSuggestions(sql: string, caret: number, tables: readonly TableInfo[], columns: readonly ColumnInfo[], dbType = "postgres"): SqlSuggestion[] {
   const token = currentSqlToken(sql, caret).toLocaleLowerCase();
   if (!token) return [];
   const prefix = sql.slice(0, Math.max(0, caret - token.length));
   const statementStart = !prefix.trim() || /(?:^|;)\s*$/.test(prefix);
+  const relationPosition = isSqlRelationCompletion(sql, caret);
   const suggestions: SqlSuggestion[] = [
     ...editorKeywords(dbType).map((label) => ({
       label,
@@ -147,10 +155,14 @@ export function sqlSuggestions(sql: string, caret: number, tables: readonly Tabl
     ...columns.map((column) => ({ label: column.name, kind: "column" as const, detail: column.data_type })),
   ];
   return suggestions
-    .filter((suggestion) => suggestion.label.toLocaleLowerCase().startsWith(token))
+    .filter((suggestion) => (!relationPosition || suggestion.kind === "table") && suggestion.label.toLocaleLowerCase().startsWith(token))
     .sort((left, right) => {
-      // 语句开头优先关键字；表达式内部优先列名，减少移动键盘上的选择次数。
-      const priority = statementStart ? { keyword: 0, table: 1, column: 2 } : { column: 0, table: 1, keyword: 2 };
+      // 关系位置优先表/视图；语句开头优先关键字；表达式内部优先列名。
+      const priority = relationPosition
+        ? { keyword: 2, table: 0, column: 1 }
+        : statementStart
+          ? { keyword: 0, table: 1, column: 2 }
+          : { column: 0, table: 1, keyword: 2 };
       return priority[left.kind] - priority[right.kind] || left.label.localeCompare(right.label);
     })
     .slice(0, 8);

@@ -1386,16 +1386,16 @@ button:disabled {
 .redis-browser-search input { min-height: 45px; font-size: 12px; }
 .redis-browser-search button { display:grid; width:44px; place-items:center; border-left:1px solid var(--divider-color); font-size:0; }
 .redis-browser-search button::before { width: 16px; height: 12px; background: linear-gradient(var(--text-secondary),var(--text-secondary)) 0 0/16px 1px no-repeat,linear-gradient(var(--text-secondary),var(--text-secondary)) 3px 5px/10px 1px no-repeat,linear-gradient(var(--text-secondary),var(--text-secondary)) 6px 10px/4px 1px no-repeat; content:""; }
-.redis-table-view { height:auto; min-height:0; grid-template-rows:auto auto minmax(0,1fr); gap:0; margin:0; overflow:visible; border:0; border-radius:0; background:transparent; box-shadow:none; }
-.redis-table-tools { grid-template-columns: minmax(0,1fr) minmax(0,1.28fr) auto; gap: 8px; }
+.redis-table-view { height:auto; min-height:0; grid-template-rows:auto auto minmax(0,1fr); gap:0; margin:0; overflow:hidden; border:1px solid var(--divider-color); border-radius:var(--radius-card); background:var(--card-background); box-shadow:0 7px 22px rgba(23,32,51,.04); }
+.redis-table-tools { grid-template-columns: minmax(0,1fr) minmax(0,1.28fr) auto; gap:8px; padding:10px 10px 0; }
 .redis-table-tools label { align-content:stretch; border:0; padding:0; }
 .redis-table-tools label span { margin-bottom: 6px; color: var(--text-secondary); font-size: 10px; }
 .redis-table-tools select,.redis-table-tools > button { min-height:44px; border:1px solid var(--divider-color); border-radius:6px; background:var(--input-background); padding:0 11px; font-size:11px; }
 .redis-table-tools label:nth-child(2) select { border-color: #e6a000; box-shadow: inset 0 0 0 1px #e6a000; }
 .redis-table-tools > button { background:var(--card-background); color:var(--primary); white-space:nowrap; }
-.redis-scan-summary { display:flex; min-height:43px; align-items:center; justify-content:space-between; padding:0 8px; color:var(--text-secondary); font-size:10px; }
+.redis-scan-summary { display:flex; min-height:43px; align-items:center; justify-content:space-between; padding:0 10px; color:var(--text-secondary); font-size:10px; }
 .redis-scan-summary strong { color:var(--text-primary); font-size:10px; }
-.redis-table-scroll { height:calc(100dvh - 350px); min-height:300px; max-height:none; border:1px solid var(--divider-color); border-radius:0; }
+.redis-table-scroll { height:calc(100dvh - 350px); min-height:300px; max-height:none; border:0; border-top:1px solid var(--divider-color); border-radius:0; }
 .redis-table-scroll table { min-width:100%; font-size:10px; }
 .redis-table-scroll th { height:40px; background:var(--input-background); color:var(--text-secondary); }
 .redis-table-scroll td { height:40px; }

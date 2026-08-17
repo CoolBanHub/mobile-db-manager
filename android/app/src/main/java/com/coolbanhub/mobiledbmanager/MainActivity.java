@@ -26,7 +26,9 @@ public class MainActivity extends BridgeActivity {
         View content = findViewById(android.R.id.content);
         ViewCompat.setOnApplyWindowInsetsListener(content, (view, windowInsets) -> {
             Insets systemBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
-            view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
+            // The Capacitor WebView/decor already accounts for the top status-bar
+            // inset. Applying it here as well creates a duplicated blank band.
+            view.setPadding(systemBars.left, 0, systemBars.right, systemBars.bottom);
             return windowInsets;
         });
         ViewCompat.requestApplyInsets(content);

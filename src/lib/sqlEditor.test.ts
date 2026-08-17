@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ColumnInfo, TableInfo } from "./mobileTypes";
-import { applySqlSuggestion, buildColumnCondition, buildTableSelect, formatSql, mergeTableMetadata, quoteSqlIdentifier, sqlSuggestions } from "./sqlEditor";
+import { applySqlSuggestion, buildColumnCondition, buildTableSelect, formatSql, isSqlRelationCompletion, mergeTableMetadata, quoteSqlIdentifier, sqlSuggestions } from "./sqlEditor";
 
 const tables = [{ name: "users", table_type: "BASE TABLE" }] as TableInfo[];
 const columns = [{ name: "user_id", data_type: "uuid" }] as ColumnInfo[];
@@ -32,6 +32,21 @@ describe("mobile SQL editor helpers", () => {
       kind: "column",
     });
     expect(applySqlSuggestion("SELECT us", 9, "users")).toEqual({ sql: "SELECT users", caret: 12 });
+  });
+
+  it("only suggests tables and views while typing after FROM or JOIN", () => {
+    const objects = [
+      ...tables,
+      { name: "user_summary", table_type: "VIEW" },
+    ] as TableInfo[];
+
+    expect(isSqlRelationCompletion("SELECT * FROM us", 16)).toBe(true);
+    expect(isSqlRelationCompletion("SELECT u", 8)).toBe(false);
+    expect(sqlSuggestions("SELECT * FROM us", 16, objects, columns).map((item) => [item.label, item.kind])).toEqual([
+      ["user_summary", "table"],
+      ["users", "table"],
+    ]);
+    expect(sqlSuggestions("SELECT * FROM public.us", 23, objects, columns).every((item) => item.kind === "table")).toBe(true);
   });
 
   it("prioritizes statement keywords and includes DELETE for a leading d", () => {

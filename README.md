@@ -37,7 +37,7 @@ Mobile DB Manager 是一个可独立运行的 Android 数据库管理客户端�
 - 支持 MongoDB 的数据库、集合、文档浏览和文档编辑。
 - 支持 etcd v3 JSON Gateway 的前缀查询、键值详情和单键写入。
 - 支持 TLS、SSH 本地端口转发和 HTTP CONNECT 代理。
-- 支持 SQL 格式化、具名 JSON 参数、元数据补全、查询取消、查询历史、本机 SQL
+- 支持 SQL 格式化、具名 JSON 参数、上下文元数据补全（`FROM` / `JOIN` 后联想表和视图，并按已引用表联想字段）、查询取消、查询历史、本机 SQL
   收藏和结果导出分享；高级 SQL 一律按可写操作保护，只读连接禁止执行，生产连接
   必须完成本次确认并输入完整连接名称。
 - 支持从 GitHub Releases 检查最新 `release/v*` APK，并通过 Android 系统下载更新。

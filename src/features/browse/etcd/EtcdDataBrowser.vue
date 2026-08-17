@@ -425,7 +425,7 @@ onMounted(reload);
 .keyspace-view {
   display: grid;
   min-height: 0;
-  grid-template-rows: auto minmax(150px, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 .tree-root-label,
 .tree-node {

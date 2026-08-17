@@ -38,8 +38,11 @@ function displayValue(value: unknown) {
   return String(value);
 }
 
-function changeExportFormat(event: Event) {
-  emit("update:exportFormat", (event.target as HTMLSelectElement).value as QueryExportFormat);
+function defaultColumnWidth(index: number) {
+  if (props.result.columns.length === 1) return 220;
+  if (index === 0) return 82;
+  if (index === props.result.columns.length - 1) return 150;
+  return 176;
 }
 </script>
 
@@ -47,23 +50,11 @@ function changeExportFormat(event: Event) {
   <section class="result-panel">
     <header>
       <div class="result-metrics">
-        <strong><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 4 4 8-9" /></svg>执行成功</strong>
-        <span>{{ statusText }} · {{ result.execution_time_ms }} ms</span>
+        <strong><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 4 4 8-9" /></svg>查询成功 · {{ result.execution_time_ms }} ms · {{ result.rows.length }} 行</strong>
         <em v-if="result.has_more">MORE</em>
       </div>
       <div v-if="result.columns.length" class="result-actions">
-        <button type="button" :disabled="executing" aria-label="刷新结果" title="刷新结果" @click="emit('refresh')"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6.1 8a7 7 0 0 1 11.7-1L20 12M4 12l2.2 5a7 7 0 0 0 11.7-1" /></svg></button>
-        <button type="button" aria-label="复制结果" title="复制结果" @click="emit('copy')"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></svg></button>
-        <button class="export-action" :disabled="exporting" type="button" :aria-label="`导出并分享 ${exportFormat.toUpperCase()} 查询结果`" title="导出结果" @click="emit('export')"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg></button>
-        <details class="result-more">
-          <summary aria-label="更多结果操作"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg></summary>
-          <div>
-            <label>导出格式<select :value="exportFormat" aria-label="查询结果导出格式" @change="changeExportFormat"><option value="csv">CSV</option><option value="json">JSON</option><option value="markdown">MARKDOWN</option><option value="xlsx">EXCEL XLSX</option></select></label>
-            <button v-if="pendingEditCount" type="button" @click="emit('buildUpdateSql')">生成修改 SQL（{{ pendingEditCount }}）</button>
-            <button v-if="chartRows.length" type="button" @click="emit('toggleChart')">{{ showChart ? "显示表格" : "显示图表" }}</button>
-            <button type="button" @click="emit('autoFit')">自动调整列宽</button>
-          </div>
-        </details>
+        <button class="export-action" :disabled="exporting" type="button" :aria-label="`导出并分享 ${exportFormat.toUpperCase()} 查询结果`" title="导出结果" @click="emit('export')"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg><span>导出</span></button>
       </div>
     </header>
     <p v-if="exportStatus" class="export-status" aria-live="polite">{{ exportStatus }}</p>
@@ -72,13 +63,13 @@ function changeExportFormat(event: Event) {
     </div>
     <div v-if="result.columns.length && !showChart" class="result-scroll">
       <table>
-        <colgroup><col v-for="(_, index) in result.columns" :key="index" :style="{ width: `${columnWidths[index] ?? 160}px` }" /></colgroup>
+        <colgroup><col v-for="(_, index) in result.columns" :key="index" :style="{ width: `${columnWidths[index] ?? defaultColumnWidth(index)}px` }" /></colgroup>
         <thead><tr><th v-for="(column, index) in result.columns" :key="`${column}:${index}`"><div><span>{{ column }}</span></div></th></tr></thead>
         <tbody><tr v-for="(row, rowIndex) in result.rows" :key="resultOffset + rowIndex"><td v-for="(_, index) in result.columns" :key="index" :class="{ null: row[index] === null }"><button :class="{ 'status-value': result.columns[index].toLocaleLowerCase() === 'status' && ['active', 'paid', 'success', 'enabled'].includes(String(row[index]).toLocaleLowerCase()) }" type="button" @click="emit('openCell', rowIndex, index, row[index])">{{ displayValue(row[index]) }}</button></td></tr></tbody>
       </table>
     </div>
     <p v-else>执行成功，{{ statusText }}。</p>
-    <footer v-if="result.columns.length">
+    <footer v-if="result.columns.length && (result.has_more || resultOffset > 0)">
       <div>
         <button :disabled="executing || resultOffset === 0" aria-label="第一页" @click="emit('page', 0)"><svg viewBox="0 0 24 24"><path d="M6 5v14M18 6l-6 6 6 6" /></svg></button>
         <button :disabled="executing || resultOffset === 0" aria-label="上一页" @click="emit('page', Math.max(0, resultOffset - pageSize))"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg></button>
@@ -127,4 +118,99 @@ footer { display: flex; align-items: center; justify-content: space-between; gap
 footer > div { display: flex; align-items: center; gap: 4px; }
 footer button { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--divider-color); background: var(--input-background); }
 footer span, footer small { color: var(--muted); font-size: 8px; }
+
+/* Compact result grid aligned to the mobile SQL reference. */
+.result-panel {
+  overflow: hidden;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+}
+.result-panel > header {
+  min-height: 34px;
+  border-bottom: 1px solid #dce3ec;
+  padding: 0 14px;
+}
+.result-metrics {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.result-metrics strong {
+  gap: 5px;
+  color: #6d7d92;
+  font-size: 8px;
+  font-weight: 500;
+}
+.result-metrics strong svg {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e7f8ef;
+  padding: 3px;
+  color: #20ad68;
+  stroke-width: 2;
+}
+.result-actions {
+  height: 34px;
+}
+.result-actions > .export-action {
+  display: flex;
+  width: auto;
+  height: 34px;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #78899e !important;
+  font-size: 8px;
+}
+.result-actions > .export-action svg {
+  width: 14px;
+  height: 14px;
+}
+.result-scroll {
+  max-height: 42vh;
+  border-bottom: 1px solid #e1e7ee;
+}
+table {
+  width: 100%;
+  min-width: max-content;
+  background: #fff;
+}
+th,
+td {
+  height: 31px;
+  border-color: #e1e7ee;
+}
+th {
+  background: #f6f8fb;
+  padding: 0 11px;
+  color: #4c5e75;
+  font-size: 8px;
+  font-weight: 650;
+}
+th:first-child,
+td:first-child {
+  color: #8196b2;
+}
+td > button {
+  height: 31px;
+  padding: 0 11px;
+  color: #34445b;
+  font: 9px "Azeret Mono Variable", monospace;
+}
+th:last-child,
+td:last-child,
+th:last-child > div,
+td:last-child > button {
+  text-align: right;
+}
+.result-panel footer {
+  min-height: 46px;
+  border-top: 0;
+  padding-bottom: calc(7px + var(--page-bottom-safe));
+}
 </style>

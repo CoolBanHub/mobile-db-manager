@@ -22,7 +22,9 @@ const emit = defineEmits<{ select: [target: AppNavigationTarget] }>();
       <span>浏览</span>
     </button>
     <button :class="{ active: active === 'query' }" type="button" @click="emit('select', 'query')">
-      <svg class="nav-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 4 5-4 5M13 18h6" /></svg>
+      <svg class="nav-symbol" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m9 8-4 4 4 4M15 8l4 4-4 4M13.5 5.5l-3 13" />
+      </svg>
       <span>查询</span>
     </button>
     <button :class="{ active: active === 'settings' }" type="button" @click="emit('select', 'settings')">

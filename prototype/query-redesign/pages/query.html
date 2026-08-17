@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>SQL 查询</title>
+  <link rel="stylesheet" href="../assets/css/styles.css">
+  <link rel="stylesheet" href="../assets/css/compact-toolbar.css">
+</head>
+<body>
+  <div class="app">
+    <div class="statusbar" aria-hidden="true"><b>9:41</b><span>● ◢ ▰</span></div>
+    <header class="topbar">
+      <button class="icon-button" aria-label="返回">‹</button>
+      <div><h1>SQL 查询</h1><p>直接连接 · 本机安全执行</p></div>
+      <button class="icon-button" aria-label="打开 SQL 文件">▱</button>
+      <button class="icon-button" aria-label="更多">•••</button>
+    </header>
+
+    <main>
+      <section class="context-card" aria-label="查询上下文">
+        <button class="connection-row" id="connectionButton">
+          <span class="db-symbol"><img src="../../../src/assets/database-icons/postgres.svg" alt="PostgreSQL"></span>
+          <span><b>Docker PostgreSQL</b><small><i></i> 已连接 · 10.0.2.2</small></span>
+          <em>切换</em>
+        </button>
+        <div class="context-selects">
+          <label><span>数据库</span><select aria-label="数据库"><option>dbx</option><option>postgres</option></select></label>
+          <label><span>Schema</span><select aria-label="Schema"><option>public</option><option>information_schema</option></select></label>
+          <button class="refresh" aria-label="刷新元数据">↻</button>
+        </div>
+      </section>
+
+      <nav class="query-tabs" aria-label="查询标签">
+        <button class="active">查询 1 <span>×</span></button><button>订单分析 <span>×</span></button><button class="add" aria-label="新建查询">＋</button>
+      </nav>
+
+      <section class="workspace">
+        <div class="toolbar">
+          <div class="run-group"><button id="runButton"><span class="play">▶</span><b>运行</b></button><button id="runMenuButton">⌄</button></div>
+          <button class="tool" id="stopButton" disabled><span>■</span><small>停止</small></button>
+          <button class="tool" id="explainButton"><span>⌕</span><small>解释</small></button>
+          <button class="tool" id="formatButton"><span>≡</span><small>格式化</small></button>
+          <button class="tool"><span>⋮</span><small>更多</small></button>
+          <div class="run-menu" id="runMenu"><button>运行所选</button><button>运行全部</button></div>
+        </div>
+
+        <div class="editor-shell">
+          <ol class="line-numbers" aria-hidden="true"><li>1</li><li>2</li><li>3</li><li>4</li><li>5</li><li>6</li></ol>
+          <textarea id="sqlEditor" spellcheck="false" autocapitalize="none" aria-label="SQL 编辑器">SELECT
+  o.id,
+  o.customer_name,
+  o.total_amount
+FROM or</textarea>
+          <div class="suggestions" id="suggestions" role="listbox">
+            <header><span>表与视图</span><kbd>Tab</kbd></header>
+            <button class="selected" data-value="orders"><i class="table-icon">▦</i><span><b>orders</b><small>TABLE · public</small></span><em>↵</em></button>
+            <button data-value="order_summary"><i class="view-icon">◫</i><span><b>order_summary</b><small>VIEW · public</small></span></button>
+            <button data-value="order_items"><i class="table-icon">▦</i><span><b>order_items</b><small>TABLE · public</small></span></button>
+          </div>
+        </div>
+
+        <footer class="editor-status">
+          <div><button id="parameterButton">⌁ 参数 <b>2</b></button><button id="schemaButton">Schema: public</button></div>
+          <span>Ln 6, Col 8 · UTF-8 · PostgreSQL</span>
+        </footer>
+      </section>
+
+      <div class="resizer"><i></i></div>
+
+      <section class="output">
+        <nav class="result-tabs"><button class="active" data-panel="result">结果 <b>3</b></button><button data-panel="message">消息</button><button data-panel="plan">执行计划</button><button data-panel="schema">Schema Assist</button></nav>
+        <div class="result-panel panel active" id="resultPanel">
+          <header><span><i>✓</i> 查询成功 · 36 ms · 3 行</span><button>⇩ 导出</button></header>
+          <div class="table-wrap"><table><thead><tr><th>id</th><th>customer_name</th><th>total_amount</th></tr></thead><tbody><tr><td>1048</td><td>林一</td><td>¥1,280.00</td></tr><tr><td>1047</td><td>陈晨</td><td>¥869.00</td></tr><tr><td>1046</td><td>王欣</td><td>¥2,430.50</td></tr></tbody></table></div>
+        </div>
+        <div class="empty-panel panel" id="messagePanel"><span>✓</span><b>查询执行完成</b><small>没有警告或附加消息</small></div>
+        <div class="empty-panel panel" id="planPanel"><span>⌁</span><b>执行计划</b><small>点击上方“解释”生成只读执行计划</small></div>
+        <div class="schema-panel panel" id="schemaPanel"><header><b>public</b><input id="schemaSearch" placeholder="搜索表、视图或字段"></header><button><i>▦</i><span><b>orders</b><small>6 个字段 · TABLE</small></span><em>SELECT ↗</em></button><button><i>◫</i><span><b>order_summary</b><small>4 个字段 · VIEW</small></span><em>SELECT ↗</em></button></div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav"><button><span>▱</span><small>连接</small></button><button><span>▦</span><small>浏览</small></button><button class="active"><span>‹/›</span><small>查询</small></button><button><span>⚙</span><small>设置</small></button></nav>
+
+    <div class="toast" id="toast" role="status">SQL 已格式化</div>
+    <div class="backdrop" id="backdrop"></div>
+    <aside class="sheet" id="parameterSheet" aria-labelledby="parameterTitle"><header><div><h2 id="parameterTitle">查询参数</h2><p>执行前替换具名参数，值不会写入 SQL 文本</p></div><button class="close-sheet">×</button></header><label>status<input value="paid"></label><label>min_amount<input value="500"></label><button class="primary close-sheet">应用参数</button></aside>
+    <aside class="sheet" id="connectionSheet" aria-labelledby="connectionTitle"><header><div><h2 id="connectionTitle">选择数据库连接</h2><p>已保存并通过手机直连测试</p></div><button class="close-sheet">×</button></header><button class="connection-option selected"><i><img src="../../../src/assets/database-icons/postgres.svg" alt=""></i><span><b>Docker PostgreSQL</b><small>dbx · 10.0.2.2:15433</small></span><em>✓</em></button><button class="connection-option"><i class="mysql-logo">My</i><span><b>Docker MySQL</b><small>mysql · 10.0.2.2:13306</small></span></button><button class="connection-option"><i><img src="../../../src/assets/database-icons/sqlserver.svg" alt=""></i><span><b>Docker SQL Server</b><small>master · 10.0.2.2:11434</small></span></button></aside>
+  </div>
+  <script src="../assets/js/main.js"></script>
+</body>
+</html>
