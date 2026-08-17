@@ -187,6 +187,10 @@ workflow 会从 `release/vMAJOR.MINOR.PATCH` 自动设置 Android `versionName`
 和递增 `versionCode`，应用内更新检查也使用同一套规则。为了让 Android 能覆盖安装
 更新包，每次 Release 必须使用同一个签名证书。
 
+仓库固定的 Release 证书 SHA-256 指纹记录在
+`android/release-signing-cert.sha256`。workflow 会在上传 APK 前校验该指纹；如果
+GitHub Secret 中的 keystore 被替换，构建会失败而不会发布无法覆盖安装的 APK。
+
 ## 发布签名
 
 GitHub Actions 发布 APK 需要配置以下仓库 Secrets：
@@ -195,6 +199,10 @@ GitHub Actions 发布 APK 需要配置以下仓库 Secrets：
 - `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
 - `MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS`
 - `MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD`
+
+`MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64` 必须始终指向与
+`android/release-signing-cert.sha256` 指纹匹配的同一个 keystore；不要为后续版本
+重新生成证书。
 
 `MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64` 是 keystore 文件的 base64 内容：
 

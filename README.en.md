@@ -221,6 +221,11 @@ from `release/vMAJOR.MINOR.PATCH`. In-app update checks use the same rule. Andro
 can only install an APK update over an existing app when every release uses the
 same signing certificate.
 
+The fixed Release certificate SHA-256 fingerprint is stored in
+`android/release-signing-cert.sha256`. The workflow verifies the APK against this
+fingerprint before upload; if the GitHub Secret keystore changes, the build fails
+instead of publishing an APK that cannot upgrade the existing installation.
+
 ## Release Signing
 
 GitHub Actions APK releases require these repository secrets:
@@ -229,6 +234,10 @@ GitHub Actions APK releases require these repository secrets:
 - `MOBILE_DB_MANAGER_ANDROID_STORE_PASSWORD`
 - `MOBILE_DB_MANAGER_ANDROID_KEY_ALIAS`
 - `MOBILE_DB_MANAGER_ANDROID_KEY_PASSWORD`
+
+`MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64` must always contain the same keystore
+whose certificate matches `android/release-signing-cert.sha256`; do not generate a
+new signing certificate for later releases.
 
 `MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64` is the base64-encoded keystore file:
 

@@ -166,7 +166,24 @@ jobs:
       - name: Verify APK signature
         shell: bash
         run: |
-          "${ANDROID_HOME}/build-tools/36.0.0/apksigner" verify --verbose --print-certs "release/${{ steps.release.outputs.asset_name }}"
+          asset="release/${{ steps.release.outputs.asset_name }}"
+          apksigner="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
+          expected_cert_sha256="$(tr -d '[:space:]' < android/release-signing-cert.sha256 | tr '[:lower:]' '[:upper:]')"
+          actual_cert_sha256="$(${apksigner} verify --verbose --print-certs "${asset}" | awk -F': ' '/certificate SHA-256 digest/ { print toupper($NF); exit }')"
+
+          if [[ -z "${actual_cert_sha256}" ]]; then
+            echo "::error::Could not read the APK signing certificate fingerprint"
+            exit 1
+          fi
+          if [[ "${actual_cert_sha256}" != "${expected_cert_sha256}" ]]; then
+            echo "::error::APK was signed with an unexpected certificate"
+            echo "Expected: ${expected_cert_sha256}"
+            echo "Actual:   ${actual_cert_sha256}"
+            echo "Use the same release keystore in MOBILE_DB_MANAGER_ANDROID_KEYSTORE_BASE64 for every release."
+            exit 1
+          fi
+
+          "${apksigner}" verify --verbose "${asset}"
 
       - name: Create or update GitHub Release
         env:
