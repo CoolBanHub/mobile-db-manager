@@ -25,6 +25,8 @@ final class DirectConnectionValidator {
                 .put("database", DirectJson.nullable(DirectJson.optionalDatabase(config)))
                 .put("color", DirectJson.nullable(config.optString("color", null)))
                 .put("ssl", config.optBoolean("ssl"))
+                .put("sshEnabled", config.optBoolean("sshEnabled", false))
+                .put("proxyEnabled", config.optBoolean("proxyEnabled", false))
                 .put("sslMode", config.optString("sslMode", "verify-full"))
                 .put("readOnly", config.optBoolean("readOnly"))
                 .put("isProduction", config.optBoolean("isProduction"))

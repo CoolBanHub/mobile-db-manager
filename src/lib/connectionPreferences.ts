@@ -3,11 +3,16 @@ export type ConnectionEnvironment = "production" | "staging" | "development";
 export interface ConnectionPreference {
   group: string;
   favorite: boolean;
+  pinned: boolean;
   environment: ConnectionEnvironment;
   tags: string[];
+  lastUsedAt: number;
 }
 
+export type ConnectionSortMode = "recent" | "name" | "environment" | "pinned";
+
 const STORAGE_KEY = "mobile-db-manager.connection-preferences.v1";
+const SORT_MODE_STORAGE_KEY = "mobile-db-manager.connection-sort-mode.v1";
 
 type PreferenceMap = Record<string, ConnectionPreference>;
 
@@ -45,9 +50,25 @@ export function getConnectionPreference(
   return {
     group: saved?.group || "未分组",
     favorite: saved?.favorite === true,
+    pinned: saved?.pinned === true,
     environment: saved?.environment ?? (isProduction ? "production" : "development"),
     tags: Array.isArray(saved?.tags) ? parseConnectionTags(saved.tags.join(",")) : [],
+    lastUsedAt: Number.isFinite(saved?.lastUsedAt) ? saved.lastUsedAt : 0,
   };
+}
+
+export function getConnectionSortMode(
+  storage: Pick<Storage, "getItem"> = localStorage,
+): ConnectionSortMode {
+  const value = storage.getItem(SORT_MODE_STORAGE_KEY);
+  return value === "name" || value === "environment" || value === "pinned" ? value : "recent";
+}
+
+export function saveConnectionSortMode(
+  mode: ConnectionSortMode,
+  storage: Pick<Storage, "setItem"> = localStorage,
+): void {
+  storage.setItem(SORT_MODE_STORAGE_KEY, mode);
 }
 
 export function saveConnectionPreference(

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   getConnectionPreference,
+  getConnectionSortMode,
   parseConnectionTags,
   removeConnectionPreference,
   saveConnectionPreference,
+  saveConnectionSortMode,
 } from "./connectionPreferences";
 
 function memoryStorage() {
@@ -23,14 +25,16 @@ describe("connectionPreferences", () => {
     const storage = memoryStorage();
     saveConnectionPreference(
       "connection",
-      { group: "Core", favorite: true, environment: "staging", tags: ["核心", "只读"] },
+      { group: "Core", favorite: true, pinned: true, environment: "staging", tags: ["核心", "只读"], lastUsedAt: 123 },
       storage,
     );
     expect(getConnectionPreference("connection", false, storage)).toEqual({
       group: "Core",
       favorite: true,
+      pinned: true,
       environment: "staging",
       tags: ["核心", "只读"],
+      lastUsedAt: 123,
     });
     removeConnectionPreference("connection", storage);
     expect(getConnectionPreference("connection", false, storage).favorite).toBe(false);
@@ -44,5 +48,16 @@ describe("connectionPreferences", () => {
       legacy: { group: "旧分组", favorite: false, environment: "development" },
     }));
     expect(getConnectionPreference("legacy", false, storage).tags).toEqual([]);
+    expect(getConnectionPreference("legacy", false, storage).pinned).toBe(false);
+    expect(getConnectionPreference("legacy", false, storage).lastUsedAt).toBe(0);
+  });
+
+  it("persists a supported catalog sort mode and falls back to recent", () => {
+    const storage = memoryStorage();
+    expect(getConnectionSortMode(storage)).toBe("recent");
+    saveConnectionSortMode("environment", storage);
+    expect(getConnectionSortMode(storage)).toBe("environment");
+    storage.setItem("mobile-db-manager.connection-sort-mode.v1", "invalid");
+    expect(getConnectionSortMode(storage)).toBe("recent");
   });
 });

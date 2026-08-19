@@ -9,6 +9,8 @@ export interface MobileConnectionSummary {
   database: string | null;
   color: string | null;
   ssl: boolean;
+  sshEnabled: boolean;
+  proxyEnabled: boolean;
   sslMode: "required" | "verify-ca" | "verify-full";
   readOnly: boolean;
   isProduction: boolean;

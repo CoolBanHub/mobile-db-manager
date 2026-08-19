@@ -28,10 +28,11 @@ SSH tunnel, HTTP CONNECT proxy.
 
 ## Features
 
-- Create, edit, test, search, favorite, group, and delete database connections on
-  the device. Classify and filter connections with consistent pale-blue
-  Development, Staging, and Production environment labels; new connections
-  default to Development.
+- Create, edit, test, search, favorite, pin, group, and delete database connections
+  on the device. Sort the connection catalog by recent use, name, environment, or
+  pinned state, and use advanced search for database type, environment, transport,
+  tag/group, favorites, and Production connections. New connections default to
+  Development.
 - Manage reusable SSH jump hosts and a separate SSH key library from Settings.
   A jump host can use a password or reference a key by `keyId`, while database
   connections still reference only the jump-host ID. Android's document picker

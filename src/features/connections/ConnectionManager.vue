@@ -2,12 +2,13 @@
 import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import PageState from "@/components/PageState.vue";
+import ConnectionCatalogSheets, { type ConnectionAdvancedFilters } from "./ConnectionCatalogSheets.vue";
 import postgresIcon from "@/assets/database-icons/postgres.svg";
 import redisIcon from "@/assets/database-icons/redis.svg";
 import mongodbIcon from "@/assets/database-icons/mongodb.svg";
 import sqlserverIcon from "@/assets/database-icons/sqlserver.svg";
 import etcdIcon from "@/assets/database-icons/etcd.svg";
-import { getConnectionPreference, removeConnectionPreference, saveConnectionPreference, type ConnectionEnvironment } from "@/lib/connectionPreferences";
+import { getConnectionPreference, getConnectionSortMode, removeConnectionPreference, saveConnectionPreference, saveConnectionSortMode, type ConnectionEnvironment, type ConnectionSortMode } from "@/lib/connectionPreferences";
 import { databaseCapability, mobileDatabaseCapabilities } from "@/lib/databaseCapabilities";
 import { deleteDirectConnection, getDirectConnection, saveDirectConnection, testDirectConnection } from "@/lib/direct/connections";
 import { listSshProfiles } from "@/lib/direct/sshProfiles";
@@ -23,6 +24,13 @@ const emit = defineEmits<{
 const search = ref("");
 const environment = ref<"all" | ConnectionEnvironment>("all");
 const favoritesOnly = ref(false);
+const sortOpen = ref(false);
+const advancedSearchOpen = ref(false);
+const sortMode = ref<ConnectionSortMode>(getConnectionSortMode());
+const pendingSortMode = ref<ConnectionSortMode>(sortMode.value);
+const emptyAdvancedFilters = (): ConnectionAdvancedFilters => ({ type: "all", environment: "all", transport: "all", tag: "", favorite: false, production: false });
+const advancedFilters = ref<ConnectionAdvancedFilters>(emptyAdvancedFilters());
+const pendingAdvancedFilters = ref<ConnectionAdvancedFilters>(emptyAdvancedFilters());
 const collapsedGroups = ref(new Set<string>());
 const editorOpen = ref(false);
 const advancedOpen = ref(false);
@@ -89,7 +97,18 @@ const draft = reactive<MobileConnectionDraft>(blankDraft());
 const currentCapability = computed(() => databaseCapability(draft.dbType));
 const selectedSshProfile = computed(() => sshProfiles.value.find((profile) => profile.id === draft.sshProfileId) ?? null);
 const preferenceEnvironment = ref<ConnectionEnvironment>("development");
-const activeFilterCount = computed(() => (environment.value === "all" ? 0 : 1) + (favoritesOnly.value ? 1 : 0));
+const advancedFilterCount = computed(() => Object.entries(advancedFilters.value).filter(([key, value]) => key === "favorite" || key === "production" ? value : value !== "all" && value !== "").length);
+const activeFilterCount = computed(() => (environment.value === "all" ? 0 : 1) + (favoritesOnly.value ? 1 : 0) + advancedFilterCount.value);
+const tagOptions = computed(() => {
+  void preferenceRevision.value;
+  const values = new Set<string>();
+  for (const connection of props.connections) {
+    const item = preference(connection);
+    if (item.group && item.group !== "未分组") values.add(item.group);
+    item.tags.forEach((tag) => values.add(tag));
+  }
+  return [...values].sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true }));
+});
 const editorStepCopy = computed(() => [
   { label: "基本", description: "类型与用途" },
   { label: "认证", description: "服务器与账号" },
@@ -105,27 +124,49 @@ const filteredConnections = computed(() => {
     const preference = getConnectionPreference(connection.id, connection.isProduction);
     if (favoritesOnly.value && !preference.favorite) return false;
     if (environment.value !== "all" && preference.environment !== environment.value) return false;
+    const advanced = advancedFilters.value;
+    if (advanced.type !== "all" && connection.dbType !== advanced.type) return false;
+    if (advanced.environment !== "all" && preference.environment !== advanced.environment) return false;
+    if (advanced.favorite && !preference.favorite) return false;
+    if (advanced.production && preference.environment !== "production") return false;
+    if (advanced.tag && preference.group !== advanced.tag && !preference.tags.includes(advanced.tag)) return false;
+    const isDirect = !connection.ssl && !connection.sshEnabled && !connection.proxyEnabled;
+    if (advanced.transport === "direct" && !isDirect) return false;
+    if (advanced.transport === "tls" && !connection.ssl) return false;
+    if (advanced.transport === "ssh" && !connection.sshEnabled) return false;
+    if (advanced.transport === "http" && !connection.proxyEnabled) return false;
     return !needle || [connection.name, connection.host, connection.database, connection.dbType, connection.note, preference.group, ...preference.tags].filter(Boolean).some((value) => String(value).toLocaleLowerCase().includes(needle));
   });
 });
 
+function compareConnections(left: MobileConnectionSummary, right: MobileConnectionSummary) {
+  const leftPreference = preference(left);
+  const rightPreference = preference(right);
+  const defaultTypeOrder = ["postgres", "mysql", "redis", "mongodb", "sqlserver", "etcd"];
+  const compareDefault = () => {
+    const leftIndex = defaultTypeOrder.indexOf(left.dbType);
+    const rightIndex = defaultTypeOrder.indexOf(right.dbType);
+    return (leftIndex < 0 ? defaultTypeOrder.length : leftIndex) - (rightIndex < 0 ? defaultTypeOrder.length : rightIndex)
+      || left.name.localeCompare(right.name, "zh-CN", { numeric: true });
+  };
+  if (sortMode.value === "name") return left.name.localeCompare(right.name, "zh-CN", { numeric: true });
+  if (sortMode.value === "environment") {
+    const rank = { production: 0, staging: 1, development: 2 };
+    return rank[leftPreference.environment] - rank[rightPreference.environment] || left.name.localeCompare(right.name, "zh-CN", { numeric: true });
+  }
+  if (sortMode.value === "pinned" && leftPreference.pinned !== rightPreference.pinned) return leftPreference.pinned ? -1 : 1;
+  return rightPreference.lastUsedAt - leftPreference.lastUsedAt || compareDefault();
+}
+
 const groupedConnections = computed(() => {
   const groups = new Map<string, MobileConnectionSummary[]>();
-  for (const connection of filteredConnections.value) {
+  for (const connection of [...filteredConnections.value].sort(compareConnections)) {
     const type = connection.dbType.toLocaleLowerCase();
     groups.set(type, [...(groups.get(type) ?? []), connection]);
   }
-  const order = ["postgres", "mysql", "redis", "mongodb", "sqlserver", "etcd"];
   return [...groups.entries()]
     .map(([type, items]) => ({ type, label: databaseCapability(type).label, items }))
-    .sort((left, right) => {
-      const leftIndex = order.indexOf(left.type);
-      const rightIndex = order.indexOf(right.type);
-      if (leftIndex === -1 && rightIndex === -1) return left.label.localeCompare(right.label);
-      if (leftIndex === -1) return 1;
-      if (rightIndex === -1) return -1;
-      return leftIndex - rightIndex;
-    });
+    .sort((left, right) => compareConnections(left.items[0], right.items[0]));
 });
 
 function preference(connection: MobileConnectionSummary) {
@@ -155,6 +196,12 @@ function databaseUsageTag(type: MobileConnectionSummary["dbType"]) {
   return tags[type] ?? databaseCapability(type).label;
 }
 
+function databaseName(connection: MobileConnectionSummary) {
+  const name = connection.database?.trim();
+  if (name) return name;
+  return connection.dbType === "etcd" ? "无数据库" : "未指定数据库";
+}
+
 function toggleGroup(type: string) {
   const next = new Set(collapsedGroups.value);
   if (next.has(type)) next.delete(type);
@@ -170,6 +217,52 @@ function toggleFavorite(connection: MobileConnectionSummary) {
   const current = preference(connection);
   saveConnectionPreference(connection.id, { ...current, favorite: !current.favorite });
   preferenceRevision.value += 1;
+}
+
+function togglePinned(connection: MobileConnectionSummary) {
+  const current = preference(connection);
+  saveConnectionPreference(connection.id, { ...current, pinned: !current.pinned });
+  preferenceRevision.value += 1;
+}
+
+function openConnection(connection: MobileConnectionSummary) {
+  saveConnectionPreference(connection.id, { ...preference(connection), lastUsedAt: Date.now() });
+  preferenceRevision.value += 1;
+  emit("browse", connection);
+}
+
+function openSort() {
+  pendingSortMode.value = sortMode.value;
+  advancedSearchOpen.value = false;
+  sortOpen.value = true;
+}
+
+function openAdvancedSearch() {
+  pendingAdvancedFilters.value = { ...advancedFilters.value };
+  sortOpen.value = false;
+  advancedSearchOpen.value = true;
+}
+
+function applySort() {
+  sortMode.value = pendingSortMode.value;
+  saveConnectionSortMode(sortMode.value);
+  sortOpen.value = false;
+}
+
+function resetSort() {
+  pendingSortMode.value = "recent";
+}
+
+function applyAdvancedFilters() {
+  advancedFilters.value = { ...pendingAdvancedFilters.value };
+  environment.value = "all";
+  favoritesOnly.value = false;
+  advancedSearchOpen.value = false;
+}
+
+function resetAdvancedFilters() {
+  pendingAdvancedFilters.value = emptyAdvancedFilters();
+  advancedFilters.value = emptyAdvancedFilters();
 }
 
 function resetEditor() {
@@ -328,6 +421,8 @@ function retreatEditor() {
 function resetFilters() {
   environment.value = "all";
   favoritesOnly.value = false;
+  advancedFilters.value = emptyAdvancedFilters();
+  pendingAdvancedFilters.value = emptyAdvancedFilters();
 }
 
 async function testConnection() {
@@ -359,8 +454,10 @@ async function saveConnection() {
     saveConnectionPreference(saved.id, {
       group: groupDraft.value.trim() || "未分组",
       favorite: draft.id ? preference(saved).favorite : false,
+      pinned: draft.id ? preference(saved).pinned : false,
       environment: preferenceEnvironment.value,
       tags: preservedTags.value,
+      lastUsedAt: draft.id ? preference(saved).lastUsedAt : 0,
     });
     editorOpen.value = false;
     emit("changed");
@@ -403,6 +500,11 @@ function handleBack() {
     advancedOpen.value = false;
     return true;
   }
+  if (sortOpen.value || advancedSearchOpen.value) {
+    sortOpen.value = false;
+    advancedSearchOpen.value = false;
+    return true;
+  }
   if (editorOpen.value) {
     if (editorStep.value > 1) {
       retreatEditor();
@@ -428,8 +530,12 @@ onMounted(loadSavedSshProfiles);
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg>
         </button>
       </label>
-      <button class="filter-button" type="button" aria-label="仅显示收藏连接" :class="{ active: favoritesOnly }" @click="favoritesOnly = !favoritesOnly">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z" /></svg>
+      <button class="filter-button" type="button" aria-label="连接排序" :aria-expanded="sortOpen" :class="{ active: sortOpen || sortMode !== 'recent' }" @click="openSort">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4v16M5 7l3-3 3 3M16 20V4m-3 13 3 3 3-3" /></svg>
+      </button>
+      <button class="filter-button" type="button" :aria-label="advancedFilterCount ? `高级搜索，已应用 ${advancedFilterCount} 个条件` : '打开高级搜索'" :aria-expanded="advancedSearchOpen" :class="{ active: advancedSearchOpen || advancedFilterCount > 0 }" @click="openAdvancedSearch">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+        <i v-if="advancedFilterCount">{{ advancedFilterCount }}</i>
       </button>
     </div>
 
@@ -450,7 +556,7 @@ onMounted(loadSavedSshProfiles);
         <small>{{ group.items.length }}</small>
       </button>
       <article v-for="connection in collapsedGroups.has(group.type) ? [] : group.items" :key="connection.id" class="managed-connection">
-        <div class="connection-main" role="button" tabindex="0" @click="emit('browse', connection)" @keydown.enter="emit('browse', connection)">
+        <div class="connection-main" role="button" tabindex="0" @click="openConnection(connection)" @keydown.enter="openConnection(connection)">
           <span class="database-mark" :data-type="connection.dbType">
             <img v-if="databaseIcon(connection.dbType)" :src="databaseIcon(connection.dbType)" alt="" />
             <svg v-else viewBox="0 0 24 24" aria-hidden="true">
@@ -475,7 +581,8 @@ onMounted(loadSavedSshProfiles);
           </button>
         </div>
         <div class="connection-actions">
-          <span>{{ connection.note || "点击卡片浏览数据" }}</span>
+          <span :title="databaseName(connection)">{{ databaseName(connection) }}</span>
+          <button :class="{ pinned: preference(connection).pinned }" type="button" @click="togglePinned(connection)">{{ preference(connection).pinned ? "取消置顶" : "置顶" }}</button>
           <button type="button" @click="openEdit(connection)">编辑</button>
           <button class="danger-text" type="button" @click="deleteCandidate = connection">删除</button>
         </div>
@@ -494,6 +601,22 @@ onMounted(loadSavedSshProfiles);
       confirm-label="永久删除"
       @cancel="deleteCandidate = null"
       @confirm="deleteCandidate && deleteConnection(deleteCandidate)"
+    />
+
+    <ConnectionCatalogSheets
+      :advanced-open="advancedSearchOpen"
+      :sort-open="sortOpen"
+      :advanced-filter-count="advancedFilterCount"
+      :filters="pendingAdvancedFilters"
+      :sort-mode="pendingSortMode"
+      :tag-options="tagOptions"
+      @close="sortOpen = false; advancedSearchOpen = false"
+      @reset-filters="resetAdvancedFilters"
+      @apply-filters="applyAdvancedFilters"
+      @reset-sort="resetSort"
+      @apply-sort="applySort"
+      @update:filters="pendingAdvancedFilters = $event"
+      @update:sort-mode="pendingSortMode = $event"
     />
 
     <Teleport to="body">
@@ -669,7 +792,7 @@ onMounted(loadSavedSshProfiles);
 }
 .catalog-tools {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: minmax(0, 1fr) 42px 42px;
   gap: var(--space-2);
 }
 .catalog-search {
@@ -722,10 +845,25 @@ onMounted(loadSavedSshProfiles);
   font-size: 11px;
 }
 .filter-button {
+  position: relative;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--muted);
+}
+.filter-button i {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--acid);
+  color: #fff;
+  font-size: 7px;
+  font-style: normal;
 }
 .filter-button svg {
   width: 20px;
@@ -983,6 +1121,9 @@ onMounted(loadSavedSshProfiles);
 }
 .connection-actions .danger-text {
   color: var(--danger);
+}
+.connection-actions button.pinned {
+  color: var(--acid);
 }
 .catalog-empty {
   min-height: 180px;

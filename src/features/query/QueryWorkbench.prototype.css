@@ -1,0 +1,298 @@
+.query-workbench {
+  --query-surface: var(--card-background);
+  --query-canvas: color-mix(in srgb, var(--primary) 3%, var(--app-background));
+  --query-subtle: var(--input-background);
+  --query-border: var(--divider-color);
+  --query-text: var(--ink);
+  --query-muted: var(--muted);
+
+  background: var(--query-surface);
+}
+
+.query-topbar,
+.query-tabs,
+.editor,
+.query-toolbar,
+.code-editor,
+.editor-tools,
+.result-tabs {
+  border-color: var(--query-border);
+  background: var(--query-surface);
+}
+
+.query-context-card {
+  border-color: var(--query-border);
+  background: var(--query-canvas);
+}
+
+.query-page-title strong,
+.query-connection-summary strong,
+.query-context-selectors select,
+.editor-input textarea,
+.sql-highlight {
+  color: var(--query-text);
+}
+
+.query-page-title small,
+.query-connection-summary small,
+.editor-tools small {
+  color: var(--query-muted);
+}
+
+.query-database-mark,
+.query-context-selectors label,
+.query-context-selectors > button,
+.suggestion-list {
+  border-color: var(--query-border);
+  background: var(--query-surface);
+}
+
+.query-connection-picker {
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+}
+
+.editor-tools small {
+  overflow: hidden;
+  min-width: 0;
+  max-width: 48%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-tabs {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.result-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.query-result-empty {
+  display: grid;
+  min-height: 174px;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--query-border);
+  background: var(--query-surface);
+  color: var(--query-muted);
+  text-align: center;
+}
+
+.query-result-empty > span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--query-border));
+  border-radius: 8px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.query-result-empty svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.query-result-empty strong {
+  color: var(--query-text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.query-result-empty small {
+  font-size: 8px;
+}
+
+.query-sheet-backdrop {
+  --query-surface: var(--card-background);
+  --query-border: var(--divider-color);
+  --query-text: var(--ink);
+  --query-muted: var(--muted);
+
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  align-items: end;
+  background: rgba(12, 24, 39, 0.38);
+  padding-top: max(24px, env(safe-area-inset-top));
+}
+
+.query-connection-sheet {
+  width: min(100%, var(--content-max-width));
+  max-height: min(74dvh, 620px);
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--query-border);
+  border-bottom: 0;
+  border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
+  background: var(--query-surface);
+  box-shadow: var(--shadow-raised);
+  animation: query-sheet-enter 180ms ease-out;
+}
+
+.query-connection-sheet > header {
+  display: flex;
+  min-height: 66px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--query-border);
+  padding: 12px 16px;
+}
+
+.query-connection-sheet > header > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.query-connection-sheet > header strong {
+  color: var(--query-text);
+  font-size: 15px;
+}
+
+.query-connection-sheet > header small {
+  color: var(--query-muted);
+  font-size: 9px;
+}
+
+.query-connection-sheet > header button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--query-muted);
+  font-size: 22px;
+}
+
+.query-connection-options {
+  overflow-y: auto;
+  max-height: calc(min(74dvh, 620px) - 66px);
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  overscroll-behavior-y: contain;
+}
+
+.query-connection-options > button {
+  display: grid;
+  width: 100%;
+  min-height: 68px;
+  grid-template-columns: 40px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  border-bottom: 1px solid var(--query-border);
+  background: transparent;
+  padding: 9px 16px;
+  color: var(--query-text);
+  text-align: left;
+}
+
+.query-connection-options > button.selected {
+  background: color-mix(in srgb, var(--primary) 8%, var(--query-surface));
+}
+
+.query-connection-options > button > i {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--query-border);
+  border-radius: 8px;
+  background: var(--query-surface);
+  color: var(--primary);
+  font-style: normal;
+}
+
+.query-connection-options img,
+.query-connection-options svg {
+  width: 27px;
+  height: 27px;
+  object-fit: contain;
+}
+
+.query-connection-options svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.query-connection-options > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.query-connection-options strong,
+.query-connection-options small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.query-connection-options strong {
+  font-size: 12px;
+}
+
+.query-connection-options small {
+  color: var(--query-muted);
+  font-size: 9px;
+}
+
+.query-connection-options em {
+  color: var(--primary);
+  font-size: 15px;
+  font-style: normal;
+}
+
+.query-connection-sheet > p {
+  margin: 0;
+  padding: 32px 16px calc(32px + env(safe-area-inset-bottom));
+  color: var(--query-muted);
+  font-size: 10px;
+  text-align: center;
+}
+
+@keyframes query-sheet-enter {
+  from { transform: translateY(18px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@media (max-width: 360px) {
+  .result-tabs {
+    padding-inline: 4px;
+  }
+
+  .result-tabs button {
+    padding-inline: 9px;
+  }
+
+  .result-tabs button:last-child {
+    margin-left: 0;
+  }
+
+  .query-connection-sheet > header,
+  .query-connection-options > button {
+    padding-inline: 13px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .query-connection-sheet {
+    animation: none;
+  }
+}

@@ -61,6 +61,7 @@ const suggestionPosition = ref({ top: "58px", left: "48px" });
 const columnsByTable = ref<Record<string, ColumnInfo[]>>({});
 const loadingSuggestionTables = new Set<string>();
 const runMenuOpen = ref(false);
+const connectionSheetOpen = ref(false);
 const showSavePanel = ref(false);
 const activeResultTab = ref<"result" | "messages" | "plan" | "schema">("result");
 // 默认给结果区预留一行表头与数据的空间；仍可通过中间拖拽条扩大编辑器。
@@ -149,6 +150,17 @@ const suggestionColumns = computed(() => {
 });
 const editorLineCount = computed(() => Math.max(1, sql.value.split("\n").length));
 const highlightedSql = computed(() => highlightSql(sql.value));
+
+function connectionIcon(connection: MobileConnectionSummary) {
+  const icons: Record<string, string> = {
+    postgres: postgresIcon,
+    redis: redisIcon,
+    mongodb: mongodbIcon,
+    sqlserver: sqlserverIcon,
+    etcd: etcdIcon,
+  };
+  return icons[connection.dbType] ?? "";
+}
 
 function fail(reason: unknown) {
   error.value = reason instanceof Error ? reason.message : "请求失败";
@@ -332,6 +344,12 @@ async function selectConnection(preferredDatabase?: string, preferredSchema?: st
   } finally {
     if (requestId === connectionRequestId) loadingContext.value = false;
   }
+}
+
+async function chooseConnection(id: string) {
+  connectionId.value = id;
+  connectionSheetOpen.value = false;
+  await selectConnection();
 }
 
 async function selectDatabase(preferredSchema?: string | null) {
@@ -1064,6 +1082,10 @@ function autoFitColumns() {
 }
 
 function handleBack() {
+  if (connectionSheetOpen.value) {
+    connectionSheetOpen.value = false;
+    return true;
+  }
   if (!selectedCell.value) return false;
   selectedCell.value = null;
   return true;
@@ -1099,28 +1121,27 @@ defineExpose({ handleBack });
         </span>
         <div>
           <strong>{{ selectedConnection?.name || "选择数据库连接" }}</strong>
-          <small v-if="selectedConnection"><i></i>{{ selectedDatabaseLabel }} · 已连接</small>
+          <small v-if="selectedConnection"><i></i>已连接 · {{ selectedConnection.host }}</small>
           <small v-else>连接后加载数据库结构与输入联想</small>
         </div>
-        <label class="query-connection-picker">
-          <select v-model="connectionId" aria-label="查询连接" @change="selectConnection()">
-          <option value="">选择连接</option>
-          <option v-for="item in connections" :key="item.id" :value="item.id">{{ item.name }}</option>
-          </select>
-        </label>
+        <button class="query-connection-picker" type="button" :aria-label="selectedConnection ? `切换数据库连接，当前为${selectedConnection.name}` : '选择数据库连接'" @click="connectionSheetOpen = true"></button>
         <span class="query-switch-label">切换</span>
         <div class="query-context-selectors">
           <label>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="5.5" ry="2.2" /><path d="M6.5 6v5c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V6M6.5 11v5c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2v-5" /></svg>
-            <span>数据库</span>
+            <span class="query-context-value">
+              <small>数据库</small>
+              <strong>{{ database || "选择数据库" }}</strong>
+            </span>
             <select v-model="database" :disabled="!connectionId || loadingContext" aria-label="数据库" @change="selectDatabase()">
               <option value="">选择数据库</option>
               <option v-for="item in databases" :key="item.name" :value="item.name">{{ item.name }}</option>
             </select>
           </label>
           <label>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1" /><path d="M5 10h14M10 5v14" /></svg>
-            <span>{{ usesTableContextPicker ? (selectedDatabaseType === "mongodb" ? "集合" : "表") : "Schema" }}</span>
+            <span class="query-context-value">
+              <small>{{ usesTableContextPicker ? (selectedDatabaseType === "mongodb" ? "集合" : "表") : "Schema" }}</small>
+              <strong>{{ usesTableContextPicker ? (selectedTable?.name || (selectedDatabaseType === "mongodb" ? "选择集合" : "选择表")) : (schema || schemaContextLabel) }}</strong>
+            </span>
             <select v-if="usesTableContextPicker" :value="selectedTable?.name || ''" :disabled="!database || loadingMetadata" aria-label="表或集合" @change="selectContextTable">
               <option value="">{{ selectedDatabaseType === "mongodb" ? "选择集合" : "选择表" }}</option>
               <option v-for="item in tables" :key="`${item.parent_schema ?? ''}:${item.name}`" :value="item.name">{{ item.name }}</option>
@@ -1216,6 +1237,11 @@ defineExpose({ handleBack });
     <div v-if="error" class="query-error">
       <b>!</b><span>{{ error }}</span>
     </div>
+    <section v-if="activeResultTab === 'result' && !result && !error" class="query-result-empty" aria-live="polite">
+      <span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h9" /><path d="m16 15 3 2-3 2Z" /></svg></span>
+      <strong>{{ executing ? "正在执行查询" : "尚无查询结果" }}</strong>
+      <small>{{ executing ? "等待数据库返回" : executionMode === "safe" ? "安全模式" : "高级模式" }}</small>
+    </section>
     <section v-if="activeResultTab === 'messages'" class="message-panel">
       <strong>{{ result ? "执行成功" : executing ? "正在执行查询" : "等待执行" }}</strong>
       <span v-if="result">{{ resultStatusText }} · {{ result.execution_time_ms }} ms</span>
@@ -1282,6 +1308,33 @@ defineExpose({ handleBack });
       @open-cell="openCell"
       @page="executePage"
     />
+    <Teleport to="body">
+      <div v-if="connectionSheetOpen" class="query-sheet-backdrop" role="presentation" @click.self="connectionSheetOpen = false">
+        <section class="query-connection-sheet" role="dialog" aria-modal="true" aria-labelledby="query-connection-sheet-title">
+          <header>
+            <div>
+              <strong id="query-connection-sheet-title">选择数据库连接</strong>
+              <small>{{ connections.length }} 个本机安全连接</small>
+            </div>
+            <button type="button" aria-label="关闭连接选择" @click="connectionSheetOpen = false">×</button>
+          </header>
+          <div v-if="connections.length" class="query-connection-options">
+            <button v-for="item in connections" :key="item.id" :class="{ selected: item.id === connectionId }" type="button" @click="chooseConnection(item.id)">
+              <i aria-hidden="true">
+                <img v-if="connectionIcon(item)" :src="connectionIcon(item)" alt="" />
+                <svg v-else viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="6" ry="2.5" /><path d="M6 6v6c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V6M6 12v6c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-6" /></svg>
+              </i>
+              <span>
+                <strong>{{ item.name }}</strong>
+                <small>{{ item.database || databaseCapability(item.dbType).label }} · {{ item.host }}:{{ item.port }}</small>
+              </span>
+              <em v-if="item.id === connectionId">✓</em>
+            </button>
+          </div>
+          <p v-else>暂无可用连接</p>
+        </section>
+      </div>
+    </Teleport>
     <div v-if="selectedCell && result" class="cell-detail-backdrop" role="presentation" @click.self="selectedCell = null">
       <section class="cell-detail" role="dialog" aria-modal="true" aria-labelledby="cell-detail-title">
         <header>
@@ -3335,6 +3388,8 @@ td.null {
 /* Final production alignment with the approved compact HTML prototype. */
 .query-topbar {
   min-height: 61px;
+  grid-template-columns: 38px minmax(0, 1fr) 42px 42px;
+  padding-inline: 10px;
 }
 .query-context-card {
   padding: 8px 14px 9px;
@@ -3383,26 +3438,50 @@ td.null {
   gap: 7px !important;
 }
 .query-context-selectors label {
+  display: block;
   height: 35px;
-  grid-template-columns: auto minmax(0, 1fr);
-  padding-left: 9px;
+  padding: 0 24px 0 9px;
   background: #fff;
 }
-.query-context-selectors label > svg {
-  display: none;
+.query-context-value {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  line-height: 1;
+  pointer-events: none;
 }
-.query-context-selectors label > span {
+.query-context-value small {
+  flex: none;
   color: #98a2b3;
   font-size: 8px;
 }
-.query-context-selectors label::after { display: none; }
-.query-context-selectors select {
-  height: 33px;
-  min-height: 33px;
-  padding: 0;
+.query-context-value strong {
+  overflow: hidden;
+  min-width: 0;
   color: #263246;
-  font-size: 10px;
-  text-align: right;
+  font-size: 9px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.query-context-selectors label::after {
+  z-index: 1;
+  top: 50%;
+  right: 8px;
+  display: block;
+  transform: translateY(-50%);
+}
+.query-context-selectors select {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  cursor: pointer;
+  opacity: 0;
 }
 .query-context-selectors > button {
   display: grid;
@@ -3424,7 +3503,7 @@ td.null {
   stroke-width: 1.7;
 }
 .query-tabs { min-height: 40px; }
-.query-tabs button { min-height: 40px; font-size: 10px; }
+.query-tabs button { min-width: 82px; min-height: 40px; padding-inline: 14px; font-size: 10px; }
 .query-toolbar {
   display: grid;
   min-height: 42px;
@@ -3485,7 +3564,11 @@ td.null {
   line-height: 1;
 }
 .run-menu { top: 39px; left: 0; }
-.code-editor { min-height: 200px; }
+.code-editor { min-height: 200px; grid-template-columns: 40px minmax(0, 1fr); }
+.line-numbers { padding: 13px 9px; }
+.editor-input textarea,
+.sql-highlight { padding: 13px 12px; }
+.editor-tools { min-height: 31px; }
 .suggestion-list {
   overflow: hidden;
   border-color: #cfdae8;
@@ -3513,11 +3596,34 @@ td.null {
 .suggestion-list button { min-height: 44px; }
 .suggestion-list button.selected { background: #eaf3ff; }
 .editor-result-resizer { min-height: 15px; }
-.result-tabs { min-height: 39px; }
-.result-tabs button { min-height: 39px; }
+.result-tabs {
+  display: flex;
+  min-height: 39px;
+  align-items: stretch;
+  gap: 2px;
+  padding-inline: 8px;
+}
+.result-tabs button {
+  flex: 0 0 auto;
+  min-width: auto;
+  min-height: 39px;
+  padding-inline: 12px;
+  border-radius: 10px 10px 0 0;
+}
+.result-tabs button:last-child { margin-left: auto; }
+.result-tabs button.active {
+  background: #eef5ff;
+  color: #0878ff;
+  box-shadow: inset 0 -2px #0878ff;
+}
+.result-tabs button i {
+  vertical-align: middle;
+}
 @media (max-width: 360px) {
   .query-toolbar > button,
   .run-control > button { min-width: 0; }
   .query-toolbar button span { display: inline; }
 }
 </style>
+
+<style scoped src="./QueryWorkbench.prototype.css"></style>
