@@ -14,6 +14,7 @@ const emit = defineEmits<{
 
 const response = ref<MobileTableDataResponse | null>(null);
 const loading = ref(true);
+const requestedOffset = ref(0);
 const error = ref("");
 const actionError = ref("");
 const pageSize = ref(30);
@@ -64,6 +65,8 @@ const filterOperators: { value: MobileTableFilterOperator; label: string; needsV
   { value: "isNotNull", label: "不为空", needsValue: false },
 ];
 const filterNeedsValue = computed(() => filterOperators.find((item) => item.value === filterOperator.value)?.needsValue ?? true);
+const pageLoading = computed(() => loading.value && response.value !== null);
+const requestedPageNumber = computed(() => Math.floor(requestedOffset.value / pageSize.value) + 1);
 const pendingEntries = computed(() => Object.entries(pendingEdits.value));
 const pendingCellCount = computed(() => pendingEntries.value.length);
 let nextMutationOrder = 1;
@@ -182,6 +185,7 @@ function actionErrorMessage(action: "新增" | "删除" | "保存" | "复制" | 
 
 async function loadPage(offset: number) {
   const currentRequest = ++requestId;
+  requestedOffset.value = offset;
   loading.value = true;
   error.value = "";
   actionError.value = "";
@@ -642,16 +646,16 @@ onMounted(() => loadPage(0));
       </div>
     </div>
 
-    <div v-if="loading" class="data-state">
+    <div v-if="loading && !response" class="data-state">
       <i aria-hidden="true"></i><strong>正在读取表数据</strong>
       <p>服务端只读校验 · 每页 {{ pageSize }} 行</p>
     </div>
-    <div v-else-if="error" class="data-state error">
+    <div v-else-if="error && !response" class="data-state error">
       <b>!</b><strong>读取失败</strong>
       <p>{{ error }}</p>
-      <button type="button" @click="loadPage(response?.offset ?? 0)">重试</button>
+      <button type="button" @click="loadPage(requestedOffset)">重试</button>
     </div>
-    <template v-else-if="response">
+    <template v-if="response">
       <div class="data-summary">
         <div class="data-meta">
           <span>OFFSET {{ response.offset }}</span><i>·</i>
@@ -671,10 +675,14 @@ onMounted(() => loadPage(0));
         </div>
       </div>
       <p v-if="actionError && !insertOpen && !deleteCandidate" class="action-error" role="alert">{{ actionError }}</p>
+      <div v-if="error" class="page-load-error" role="alert">
+        <span>{{ error }}</span><button type="button" @click="loadPage(requestedOffset)">重新加载第 {{ requestedPageNumber }} 页</button>
+      </div>
       <p v-if="interactionStatus" class="interaction-status" aria-live="polite">{{ interactionStatus }}</p>
       <p class="data-hint">点击单元格查看或修改内容；主键字段只读。表头 − / + 可调整列宽，导出范围为当前页。</p>
-      <div class="data-scroll">
-        <table>
+      <div class="data-grid-shell" :aria-busy="pageLoading">
+        <div class="data-scroll">
+          <table>
           <colgroup>
             <col v-for="(_, index) in response.result.columns" :key="index" :style="{ width: `${columnWidths[index] ?? 120}px` }" />
           </colgroup>
@@ -713,8 +721,12 @@ onMounted(() => loadPage(0));
               </td>
             </tr>
           </tbody>
-        </table>
-        <div v-if="response.result.rows.length === 0" class="empty-data">这一页没有数据。</div>
+          </table>
+          <div v-if="response.result.rows.length === 0" class="empty-data">这一页没有数据。</div>
+        </div>
+        <div v-if="pageLoading" class="page-loading-overlay" role="status" aria-live="polite">
+          <span><i aria-hidden="true"></i><b>正在读取第 {{ requestedPageNumber }} 页</b></span>
+        </div>
       </div>
       <footer>
         <div class="page-buttons">
@@ -1202,6 +1214,70 @@ footer select {
 }
 .mutation-error {
   grid-column: 1 / -1;
+}
+.page-load-error {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  padding: 8px 10px;
+  color: #991b1b;
+  font-size: 9px;
+}
+.page-load-error span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.page-load-error button {
+  min-height: 30px;
+  flex: none;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+  background: #fff;
+  padding: 0 9px;
+  color: #991b1b;
+  font: inherit;
+  font-weight: 700;
+}
+.data-grid-shell {
+  position: relative;
+  min-width: 0;
+}
+.page-loading-overlay {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  backdrop-filter: blur(1px);
+}
+.page-loading-overlay > span {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  padding: 0 12px;
+  color: var(--ink);
+  box-shadow: 0 6px 18px rgba(23, 32, 51, 0.1);
+}
+.page-loading-overlay i {
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--line);
+  border-top-color: var(--acid);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.page-loading-overlay b {
+  font-size: 10px;
+  font-weight: 700;
 }
 .data-scroll {
   max-height: 57vh;

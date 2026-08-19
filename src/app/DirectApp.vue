@@ -55,13 +55,10 @@ const pageMotion = ref<"next" | "previous" | "">("");
 const queryConnections = computed(() => connections.value.filter((connection) => ["postgres", "mysql", "sqlserver", "redis", "mongodb"].includes(connection.dbType)));
 const browsingMode = computed(() => (browsingConnection.value ? databaseCapability(browsingConnection.value.dbType).browse : null));
 const visibleUpdateState = computed<VisibleUpdateState | null>(() => updateState.value === "idle" ? null : updateState.value);
-const headerTitle = computed(() => browsingConnection.value?.name || (activeSection.value === "connections" ? "Mobile DB" : sectionLabel(activeSection.value)));
+const headerTitle = computed(() => browsingConnection.value?.name ?? "");
 const headerSubtitle = computed(() => {
-  if (browsingConnection.value) {
-    const connection = browsingConnection.value;
-    return `${connection.host}:${connection.port}`;
-  }
-  return { connections: "连接", query: "SQL 工作台", settings: "本机偏好与安全配置" }[activeSection.value];
+  const connection = browsingConnection.value;
+  return connection ? `${connection.host}:${connection.port}` : "";
 });
 const activeNavigationTarget = computed<AppNavigationTarget>(() => {
   if (activeSection.value === "query" || activeSection.value === "settings") return activeSection.value;
@@ -247,10 +244,6 @@ function blockClickAfterSwipe(event: MouseEvent) {
   event.stopPropagation();
 }
 
-function focusConnectionSearch() {
-  document.querySelector<HTMLInputElement>(".catalog-search input")?.focus();
-}
-
 function updateErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "无法连接 GitHub Releases";
 }
@@ -391,16 +384,13 @@ onBeforeUnmount(() => {
     <main class="workspace-view">
       <section class="section-stage" :class="pageMotion ? `page-enter-${pageMotion}` : ''">
         <AppTopBar
-          v-if="activeSection !== 'query' && activeSection !== 'settings'"
+          v-if="activeSection === 'connections' && browsingConnection"
           :title="headerTitle"
           :subtitle="headerSubtitle"
-          :can-go-back="activeSection === 'connections' && !!browsingConnection"
-          :home="activeSection === 'connections' && !browsingConnection"
+          can-go-back
           :production="browsingConnection?.isProduction"
           :read-only="browsingConnection?.readOnly"
-          :action-label="activeSection === 'connections' && !browsingConnection ? '搜索连接' : undefined"
           @back="browsingConnection = null"
-          @action="focusConnectionSearch"
         />
         <UpdateBanner v-if="visibleUpdateState && activeSection !== 'query'" :state="visibleUpdateState" :info="updateInfo" :message="updateMessage" @check="checkForUpdates(true)" @download="downloadUpdate" @dismiss="dismissUpdate" />
 

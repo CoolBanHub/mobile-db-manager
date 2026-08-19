@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import InlineSelect from "@/components/InlineSelect.vue";
 import CreateTableEditor from "./CreateTableEditor.vue";
 import SessionDiagnostics from "./SessionDiagnostics.vue";
@@ -43,6 +43,8 @@ const detailLoaded = ref<Partial<Record<DetailTab, boolean>>>({});
 const detailLoading = ref(false);
 const detailError = ref("");
 const loading = ref(false);
+const contextLoading = ref(false);
+const contextError = ref("");
 const loadingMore = ref(false);
 const errorMessage = ref("");
 const hasMoreTables = ref(false);
@@ -59,7 +61,26 @@ let retryAction: (() => Promise<void>) | null = null;
 // 详情和“打开查询”各自维护请求版本，返回上级后迟到的响应不会重新打开旧对象。
 let tableActionRequestId = 0;
 let detailRequestId = 0;
+let contextRequestId = 0;
 const TABLE_BROWSING_DATABASE_TYPES = new Set(["postgres", "mysql", "sqlserver"]);
+
+interface DatabaseContextSnapshot {
+  selectedSchema: string;
+  schemas: string[];
+  tables: TableInfo[];
+  routines: DatabaseObjectInfo[];
+  routinesLoaded: boolean;
+  hasMoreTables: boolean;
+}
+
+interface TreeScrollAnchor {
+  element: HTMLElement;
+  top: number;
+  tree: HTMLElement | null;
+  treeScrollTop: number;
+}
+
+const databaseContextCache = new Map<string, DatabaseContextSnapshot>();
 
 const supportsTableBrowsing = computed(() => TABLE_BROWSING_DATABASE_TYPES.has(selectedConnection.value?.dbType ?? ""));
 const searchNeedle = computed(() => objectSearch.value.trim().toLocaleLowerCase());
@@ -108,6 +129,115 @@ function invalidateTableAction() {
   actionTable.value = "";
 }
 
+function databaseCacheKey(database: string) {
+  return `${selectedConnection.value?.id ?? ""}\u0000${database}`;
+}
+
+function cacheCurrentDatabaseContext() {
+  if (!selectedConnection.value || !selectedDatabase.value || contextLoading.value || contextError.value) return;
+  databaseContextCache.set(databaseCacheKey(selectedDatabase.value), {
+    selectedSchema: selectedSchema.value,
+    schemas: [...schemas.value],
+    tables: [...tables.value],
+    routines: [...routines.value],
+    routinesLoaded: routinesLoaded.value,
+    hasMoreTables: hasMoreTables.value,
+  });
+}
+
+function restoreDatabaseContext(snapshot: DatabaseContextSnapshot) {
+  selectedSchema.value = snapshot.selectedSchema;
+  schemas.value = [...snapshot.schemas];
+  tables.value = [...snapshot.tables];
+  routines.value = [...snapshot.routines];
+  routinesLoaded.value = snapshot.routinesLoaded;
+  hasMoreTables.value = snapshot.hasMoreTables;
+}
+
+function clearDatabaseContext() {
+  selectedSchema.value = "";
+  schemas.value = [];
+  tables.value = [];
+  routines.value = [];
+  routinesLoaded.value = false;
+  hasMoreTables.value = false;
+}
+
+function captureTreeAnchor(event?: MouseEvent): TreeScrollAnchor | null {
+  if (!(event?.currentTarget instanceof HTMLElement)) return null;
+  const tree = event.currentTarget.closest<HTMLElement>(".metadata-tree");
+  return {
+    element: event.currentTarget,
+    top: event.currentTarget.getBoundingClientRect().top,
+    tree,
+    treeScrollTop: tree?.scrollTop ?? 0,
+  };
+}
+
+async function restoreTreeAnchor(anchor: TreeScrollAnchor | null) {
+  if (!anchor) return;
+  await nextTick();
+  if (anchor.tree) anchor.tree.scrollTop = anchor.treeScrollTop;
+  const offset = anchor.element.getBoundingClientRect().top - anchor.top;
+  if (Math.abs(offset) > 0.5) window.scrollBy({ top: offset, behavior: "auto" });
+}
+
+async function loadDatabaseContext(database: string, schema?: string) {
+  if (!selectedConnection.value) return;
+  const requestId = ++contextRequestId;
+  const connectionId = selectedConnection.value.id;
+  contextLoading.value = true;
+  contextError.value = "";
+  try {
+    const nextSchemas = schema
+      ? schemas.value
+      : await loadDirectMetadata<string[]>("schemas", {
+          connectionId,
+          database,
+        });
+    const business = nextSchemas.filter((item) => {
+      const normalized = item.toLocaleLowerCase();
+      return normalized !== "information_schema" && normalized !== "sys" && !normalized.startsWith("pg_");
+    });
+    const nextSchema = schema ?? business.find((item) => ["public", "dbo"].includes(item.toLocaleLowerCase())) ?? business[0] ?? nextSchemas[0] ?? "";
+    const [nextTables, nextRoutines] = await Promise.all([
+      loadDirectMetadata<TableInfo[]>("tables", {
+        connectionId,
+        database,
+        schema: nextSchema,
+        limit: TABLE_PAGE_SIZE,
+        offset: 0,
+      }),
+      loadDirectMetadata<DatabaseObjectInfo[]>("objects", {
+        connectionId,
+        database,
+        schema: nextSchema,
+        limit: 200,
+        offset: 0,
+      }),
+    ]);
+    if (requestId !== contextRequestId || selectedDatabase.value !== database) return;
+    schemas.value = [...nextSchemas];
+    selectedSchema.value = nextSchema;
+    tables.value = nextTables;
+    routines.value = nextRoutines;
+    routinesLoaded.value = true;
+    hasMoreTables.value = nextTables.length === TABLE_PAGE_SIZE;
+    databaseContextCache.set(databaseCacheKey(database), {
+      selectedSchema: nextSchema,
+      schemas: [...nextSchemas],
+      tables: [...nextTables],
+      routines: [...nextRoutines],
+      routinesLoaded: true,
+      hasMoreTables: nextTables.length === TABLE_PAGE_SIZE,
+    });
+  } catch (error) {
+    if (requestId === contextRequestId) contextError.value = error instanceof Error ? error.message : "数据库对象加载失败";
+  } finally {
+    if (requestId === contextRequestId) contextLoading.value = false;
+  }
+}
+
 async function runLoad(action: () => Promise<void>) {
   loading.value = true;
   errorMessage.value = "";
@@ -123,6 +253,10 @@ async function runLoad(action: () => Promise<void>) {
 
 async function openConnection(connection: MobileConnectionSummary) {
   invalidateTableAction();
+  contextRequestId++;
+  databaseContextCache.clear();
+  contextLoading.value = false;
+  contextError.value = "";
   selectedConnection.value = connection;
   selectedDatabase.value = "";
   selectedSchema.value = "";
@@ -139,57 +273,44 @@ async function openConnection(connection: MobileConnectionSummary) {
   });
 }
 
-async function openDatabase(database: DatabaseInfo) {
+async function openDatabase(database: DatabaseInfo, event?: MouseEvent) {
   if (!selectedConnection.value) return;
+  const anchor = captureTreeAnchor(event);
   if (selectedDatabase.value === database.name) {
+    cacheCurrentDatabaseContext();
+    contextRequestId++;
+    contextLoading.value = false;
+    contextError.value = "";
     selectedDatabase.value = "";
-    selectedSchema.value = "";
-    schemas.value = [];
-    tables.value = [];
-    routines.value = [];
+    await restoreTreeAnchor(anchor);
     return;
   }
+  cacheCurrentDatabaseContext();
+  contextRequestId++;
   invalidateTableAction();
   selectedDatabase.value = database.name;
-  selectedSchema.value = "";
   selectedTable.value = null;
-  schemas.value = [];
-  tables.value = [];
-  routines.value = [];
-  routinesLoaded.value = false;
+  clearDatabaseContext();
   columns.value = [];
   schemaSection.value = "relations";
   level.value = "databases";
-
-  const connectionId = selectedConnection.value.id;
-  await runLoad(async () => {
-    schemas.value = await loadDirectMetadata<string[]>("schemas", {
-      connectionId,
-      database: database.name,
-    });
-    // 表与例程互不依赖，并行读取能缩短进入数据库后的首屏等待时间。
-    const preferredSchema = businessSchemas.value.find((schema) => ["public", "dbo"].includes(schema.toLocaleLowerCase())) ?? businessSchemas.value[0] ?? schemas.value[0] ?? "";
-    selectedSchema.value = preferredSchema;
-    await Promise.all([fetchTables(connectionId, database.name, preferredSchema, 0), fetchRoutines()]);
-  });
+  const cached = databaseContextCache.get(databaseCacheKey(database.name));
+  if (cached) restoreDatabaseContext(cached);
+  else await loadDatabaseContext(database.name);
+  await restoreTreeAnchor(anchor);
 }
 
-async function openSchema(schema: string) {
+async function openSchema(schema: string, event?: MouseEvent) {
   if (!selectedConnection.value) return;
   if (selectedSchema.value === schema) return;
+  const anchor = captureTreeAnchor(event);
   invalidateTableAction();
-  selectedSchema.value = schema;
   selectedTable.value = null;
-  tables.value = [];
-  routines.value = [];
-  routinesLoaded.value = false;
   columns.value = [];
   schemaSection.value = "relations";
   level.value = "databases";
-  const connectionId = selectedConnection.value.id;
-  await runLoad(async () => {
-    await Promise.all([fetchTables(connectionId, selectedDatabase.value, schema, 0), fetchRoutines()]);
-  });
+  await loadDatabaseContext(selectedDatabase.value, schema);
+  await restoreTreeAnchor(anchor);
 }
 
 function toggleObjectGroup(key: string) {
@@ -242,9 +363,17 @@ async function fetchRoutines() {
 
 async function selectSchemaSection(section: SchemaSection) {
   schemaSection.value = section;
-  errorMessage.value = "";
+  contextError.value = "";
   if (section === "routines" && !routinesLoaded.value) {
-    await runLoad(fetchRoutines);
+    contextLoading.value = true;
+    try {
+      await fetchRoutines();
+      contextLoading.value = false;
+      cacheCurrentDatabaseContext();
+    } catch (error) {
+      contextLoading.value = false;
+      contextError.value = error instanceof Error ? error.message : "数据库对象加载失败";
+    }
   }
 }
 
@@ -254,8 +383,9 @@ async function loadMoreTables() {
   errorMessage.value = "";
   try {
     await fetchTables(selectedConnection.value.id, selectedDatabase.value, selectedSchema.value, tables.value.length);
+    cacheCurrentDatabaseContext();
   } catch (error) {
-    handleError(error, loadMoreTables);
+    contextError.value = error instanceof Error ? error.message : "更多表加载失败";
   } finally {
     loadingMore.value = false;
   }
@@ -574,10 +704,8 @@ function retry() {
 
 function refreshObjects() {
   if (!selectedConnection.value || !selectedDatabase.value) return;
-  const connectionId = selectedConnection.value.id;
-  void runLoad(async () => {
-    await Promise.all([fetchTables(connectionId, selectedDatabase.value, selectedSchema.value, 0), fetchRoutines()]);
-  });
+  databaseContextCache.delete(databaseCacheKey(selectedDatabase.value));
+  void loadDatabaseContext(selectedDatabase.value, selectedSchema.value);
 }
 
 onMounted(() => {
@@ -587,6 +715,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   invalidateTableAction();
   detailRequestId++;
+  contextRequestId++;
 });
 </script>
 
@@ -623,7 +752,7 @@ onBeforeUnmount(() => {
       <div v-if="level === 'databases'" class="object-toolbar">
         <label><span>表范围</span><InlineSelect v-model="tableScope" :options="tableScopeOptions" ariaLabel="表范围" /></label>
         <label><span>排序</span><InlineSelect v-model="tableOrder" :options="tableOrderOptions" ariaLabel="排序方式" /></label>
-        <button type="button" :disabled="loading" @click="refreshObjects">刷新</button>
+        <button type="button" :disabled="loading || contextLoading" @click="refreshObjects">刷新</button>
       </div>
 
       <div v-if="loading" class="browser-state">
@@ -652,7 +781,7 @@ onBeforeUnmount(() => {
           <div v-if="connections.length === 0" class="browser-state"><strong>暂无数据库连接</strong></div>
         </div>
 
-        <div v-else-if="level === 'databases'" class="database-tree-view">
+        <div v-else-if="level === 'databases'" class="database-tree-view" :aria-busy="contextLoading">
           <div class="tree-root-label">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="m7 9 5 5 5-5" />
@@ -664,7 +793,14 @@ onBeforeUnmount(() => {
 
           <div class="metadata-tree" role="tree" aria-label="数据库对象树">
             <template v-for="database in visibleDatabases" :key="database.name">
-              <button class="tree-node database-node" :class="{ expanded: selectedDatabase === database.name }" type="button" role="treeitem" @click="openDatabase(database)">
+              <button
+                class="tree-node database-node"
+                :class="{ expanded: selectedDatabase === database.name }"
+                type="button"
+                role="treeitem"
+                :aria-expanded="selectedDatabase === database.name"
+                @click="openDatabase(database, $event)"
+              >
                 <span class="tree-chevron">›</span>
                 <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <ellipse cx="12" cy="5" rx="6" ry="3" />
@@ -674,9 +810,17 @@ onBeforeUnmount(() => {
               </button>
 
               <template v-if="selectedDatabase === database.name">
+                <div v-if="contextLoading" class="tree-inline-state" role="status">
+                  <i aria-hidden="true"></i><span>正在读取数据库对象</span>
+                </div>
+                <div v-else-if="contextError" class="tree-inline-state error" role="alert">
+                  <span>{{ contextError }}</span>
+                  <button type="button" @click="loadDatabaseContext(database.name, selectedSchema || undefined)">重试</button>
+                </div>
+                <template v-else>
                 <div v-if="showSchemaSwitcher" class="schema-switcher" aria-label="切换 Schema">
                   <span>模式</span>
-                  <button v-for="schema in businessSchemas" :key="schema" :class="{ active: selectedSchema === schema }" type="button" @click="openSchema(schema)">{{ schema }}</button>
+                  <button v-for="schema in businessSchemas" :key="schema" :class="{ active: selectedSchema === schema }" type="button" @click="openSchema(schema, $event)">{{ schema }}</button>
                 </div>
 
                 <button class="tree-node group-node" :class="{ expanded: expandedObjectGroups.has('tables') }" type="button" @click="toggleObjectGroup('tables')">
@@ -728,12 +872,13 @@ onBeforeUnmount(() => {
                     </button>
                   </template>
                 </template>
+                </template>
               </template>
             </template>
             <div v-if="databases.length === 0" class="browser-state compact"><strong>没有可见数据库</strong></div>
           </div>
 
-          <section v-if="selectedDatabase" class="schema-inspector">
+          <section v-if="selectedDatabase && !contextLoading && !contextError" class="schema-inspector">
             <nav aria-label="数据库工具">
               <button :class="{ active: inspectorTab === 'structure' }" type="button" @click="selectInspectorTab('structure')">结构</button>
               <button :class="{ active: inspectorTab === 'data' }" type="button" @click="selectInspectorTab('data')">数据</button>
@@ -1758,6 +1903,11 @@ onBeforeUnmount(() => {
 .schema-switcher { min-height: 38px; margin-left: 42px; border-bottom: 1px solid #e5ebf2; }
 .tree-count { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #dbe4ef; background-image: linear-gradient(#dbe4ef, #dbe4ef); background-position: 42px 0; background-size: 1px 100%; background-repeat: no-repeat; padding: 0 7px 0 54px; color: #7d8ba5; font-size: 8px; }
 .tree-count strong { flex: none; color: #172033; font-size: 9px; }
+.tree-inline-state { display: flex; min-height: 48px; align-items: center; gap: 9px; border-bottom: 1px solid #e5ebf2; background-image: linear-gradient(#dbe4ef, #dbe4ef); background-position: 18px 0; background-size: 1px 100%; background-repeat: no-repeat; padding: 0 9px 0 34px; color: #65728a; font-size: 10px; }
+.tree-inline-state > i { width: 15px; height: 15px; flex: 0 0 15px; animation: spin .8s linear infinite; border: 2px solid #c9d8ea; border-top-color: #0878ff; border-radius: 50%; }
+.tree-inline-state.error { align-items: flex-start; flex-wrap: wrap; background-color: #fff8f8; padding-top: 10px; padding-bottom: 10px; color: #c62f3b; }
+.tree-inline-state.error > span { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
+.tree-inline-state.error > button { min-height: 28px; flex: none; border: 1px solid #efb4b9; border-radius: 4px; background: #fff; padding: 0 10px; color: #c62f3b; font-size: 9px; font-weight: 700; }
 .leaf-node.load-node { justify-content: center; background-image: none; padding-left: 0; color: #172033; font-weight: 650; }
 .leaf-node.load-node .tree-icon { width: 15px; color: #0878ff; }
 .schema-inspector { overflow: hidden; margin-top: 8px; border: 1px solid #dbe4ef; border-radius: 6px; background: #fff; box-shadow: none; }
